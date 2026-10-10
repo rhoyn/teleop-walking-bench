@@ -4,8 +4,8 @@ cd "$(dirname "$0")"
 
 RUNS=${RUNS:-512}
 ROUNDS=${ROUNDS:-10}
-NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "  MIG ")
-[ "$NGPUS" -ge 1 ] || NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "^GPU ")
+NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "  MIG " || true)
+[ "$NGPUS" -ge 1 ] || NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "^GPU " || true)
 [ "$NGPUS" -ge 1 ] || NGPUS=1
 JOBS=${JOBS:-$((4 * NGPUS))}
 NICE=${NICE:-10}
