@@ -67,7 +67,7 @@ RUN='
   done
   if CUDA_VISIBLE_DEVICES="$GPU" chrt --idle 0 nice -n "$NICE" taskset -c "$CORE" build/teleop-walking-benchmark \
       --engine "$ENGINE" --policy "$P" --runids "$f-$((f + n - 1))" \
-      --csv "results/$out.csv" >"progress/$out.log" 2>&1; then
+      --csv "results/punches/$out.csv" >"progress/$out.log" 2>&1; then
     grep "^mujoco:" "progress/$out.log" | sed "s|^|$out |" >>benchmark.log
   else
     echo "FAILED $out" >&2
@@ -77,7 +77,7 @@ RUN='
 
 chrt --idle 0 nice -n "$NICE" taskset -c "$CPUS" make
 make capture MJWARP_NWORLD="$RUNS"
-mkdir -p results progress
+mkdir -p results/punches progress
 rm -f progress/*.log benchmark.log
 
 CPUPREV=$(mktemp -t benchmark-cpu.XXXXXX)

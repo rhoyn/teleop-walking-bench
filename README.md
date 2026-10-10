@@ -33,9 +33,9 @@ MuJoCo through [MuJoCo Warp](https://github.com/google-deepmind/mujoco_warp).
 ./benchmark.sh          # whole field, both engines
 ```
 
-Batches write `results/<tier>.r<NN>.<policy>.<engine>.csv`; `./build/table`
-renders the table, problems land in `benchmark.log`. Policies are TensorRT
-plans cached in `build/trt/`.
+Batches write `results/punches/<tier>.r<NN>.<policy>.<engine>.csv`;
+`./build/table` renders the table, problems land in `benchmark.log`. Policies
+are TensorRT plans cached in `build/trt/`.
 
 MuJoCo Warp has no C API, so `make capture` records one substep as a CUDA graph
 into `build/mjwarp/` and `--engine mujoco` replays it from C++ with no Python at
