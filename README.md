@@ -45,11 +45,11 @@ fleet size — re-record when the model or `--runs` changes:
 
 ## Results
 
-144,384 runs — both engines, in rounds of 512 run ids. A run id names one
-whole task. A policy earns depth by tier: tier A, the eleven rows that complete
-at least 60 % averaged over the two engines, ran ten rounds, 5120 run ids; tier
-B ran one, since a policy that falls most of the time needs no fourth decimal
-place. The `runs` column carries each row's own count, so no row is read
+144,384 runs — both engines, in rounds of 512 run ids. A run id names one whole
+task. A policy earns depth by tier: tier A, the eleven rows that complete at
+least half their runs averaged over the two engines, ran ten rounds, 5120 run
+ids; tier B ran one, since a policy that falls most of the time needs no fourth
+decimal place. The `runs` column carries each row's own count, so no row is read
 against a total it never had.
 
 Rows are ordered by mean survival over both engines. Errors are means over
