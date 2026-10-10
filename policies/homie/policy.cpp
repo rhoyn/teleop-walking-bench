@@ -44,8 +44,7 @@ __global__ void k_homie_obs(
     const float* __restrict__ task,
     const float* __restrict__ last_action,
     float* __restrict__ obs,
-    int envs,
-    int primed
+    int envs
 ) {
   const int env = blockIdx.x * blockDim.x + threadIdx.x;
   if (env >= envs) return;
@@ -100,14 +99,8 @@ __global__ void k_homie_obs(
   for (int i = 0; i < NUM_ACTIONS; ++i) f[k++] = la[i];
 
   float* o = obs + env * NUM_OBS;
-  if (primed) {
-    for (int i = 0; i < OBS_DIM * (HISTORY - 1); ++i) o[i] = o[i + OBS_DIM];
-    for (int i = 0; i < OBS_DIM; ++i) o[OBS_DIM * (HISTORY - 1) + i] = f[i];
-  } else {
-    for (int h = 0; h < HISTORY; ++h) {
-      for (int i = 0; i < OBS_DIM; ++i) o[h * OBS_DIM + i] = f[i];
-    }
-  }
+  for (int i = 0; i < OBS_DIM * (HISTORY - 1); ++i) o[i] = o[i + OBS_DIM];
+  for (int i = 0; i < OBS_DIM; ++i) o[OBS_DIM * (HISTORY - 1) + i] = f[i];
 }
 
 __global__ void k_homie_act(
@@ -162,18 +155,21 @@ struct Policy : policy_api::Policy {
 
   void step(const policy_api::Ctx& c) override {
     const int threads = 128, blocks = (envs + threads - 1) / threads;
-    k_homie_obs<<<blocks, threads>>>(
-        c.motor_q,
-        c.motor_dq,
-        c.gyro,
-        c.gravity,
-        c.cmd,
-        c.task,
-        d_last,
-        d_obs,
-        envs,
-        primed ? 1 : 0
-    );
+    // Upstream HistoryWrapper.reset() zeroes the history and the first action
+    // is taken on that all-zero buffer; frames shift in from the next step.
+    if (primed) {
+      k_homie_obs<<<blocks, threads>>>(
+          c.motor_q,
+          c.motor_dq,
+          c.gyro,
+          c.gravity,
+          c.cmd,
+          c.task,
+          d_last,
+          d_obs,
+          envs
+      );
+    }
     primed = true;
     policy_api::engine_run(*engine, d_obs, d_act, envs);
     k_homie_act<<<blocks, threads>>>(
