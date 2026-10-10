@@ -2,6 +2,7 @@ namespace schoi {
 
 constexpr int NUM_OBS = 47;
 constexpr int NUM_ACTIONS = 12;
+constexpr int WAIST_END = 15;
 constexpr float ANG_VEL_SCALE = 0.5f;
 constexpr float DOF_POS_SCALE = 1.0f;
 constexpr float DOF_VEL_SCALE = 0.05f;
@@ -29,7 +30,7 @@ __device__ const float D_DEFAULT_POS[NUM_ACTIONS] = {
     0.0f
 };
 
-const float KPS[NUM_ACTIONS] = {
+const float KPS[WAIST_END] = {
     100.0f,
     100.0f,
     100.0f,
@@ -41,10 +42,28 @@ const float KPS[NUM_ACTIONS] = {
     100.0f,
     150.0f,
     40.0f,
-    40.0f
+    40.0f,
+    300.0f,
+    300.0f,
+    300.0f
 };
-const float KDS[NUM_ACTIONS] =
-    {3.0f, 3.0f, 3.0f, 5.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 5.0f, 3.0f, 3.0f};
+const float KDS[WAIST_END] = {
+    3.0f,
+    3.0f,
+    3.0f,
+    5.0f,
+    3.0f,
+    3.0f,
+    3.0f,
+    3.0f,
+    3.0f,
+    5.0f,
+    3.0f,
+    3.0f,
+    3.0f,
+    3.0f,
+    3.0f
+};
 
 const policy_api::Limits LIMITS = {-1.0, 1.0, 0.5, 0.5, 0.0};
 

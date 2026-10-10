@@ -12,6 +12,8 @@ constexpr int OFF_LAST_ACTION = 53;
 constexpr int FIRST_ARM_MOTOR = 15;
 
 constexpr int OWNED_MOTORS = 13;
+constexpr int WAIST_ROLL = 13, WAIST_PITCH = 14;
+constexpr float WAIST_HELD_KP = 300.0f, WAIST_HELD_KD = 5.0f;
 constexpr float ACTION_SCALE = 0.5f;
 constexpr float CONTROL_DT = 0.02f;
 constexpr float GAIT_PERIOD = 0.8f;
@@ -49,6 +51,7 @@ const std::array<float, POLICY_NUM_MOTOR> KPS = [] {
     if (ISAAC_TO_MUJOCO[i] < FIRST_ARM_MOTOR)
       g[ISAAC_TO_MUJOCO[i]] = KPS_ISAAC[i];
   }
+  g[WAIST_ROLL] = g[WAIST_PITCH] = WAIST_HELD_KP;
   return g;
 }();
 const std::array<float, POLICY_NUM_MOTOR> KDS = [] {
@@ -57,6 +60,7 @@ const std::array<float, POLICY_NUM_MOTOR> KDS = [] {
     if (ISAAC_TO_MUJOCO[i] < FIRST_ARM_MOTOR)
       g[ISAAC_TO_MUJOCO[i]] = KDS_ISAAC[i];
   }
+  g[WAIST_ROLL] = g[WAIST_PITCH] = WAIST_HELD_KD;
   return g;
 }();
 

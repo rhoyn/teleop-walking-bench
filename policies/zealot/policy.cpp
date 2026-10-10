@@ -1,6 +1,7 @@
 namespace zealot {
 
 constexpr int NUM_ACTIONS = 12;
+constexpr int WAIST_END = 15;
 constexpr int FRAME_V28 = 53;
 constexpr int FRAME_V26 = 48;
 constexpr int FRAME_MAX = FRAME_V28;
@@ -45,10 +46,10 @@ __device__ const float D_DEFAULT_POS[NUM_ACTIONS] = {ZEALOT_DEFAULT_POS};
 __device__ const float D_Q_MIN[NUM_ACTIONS] = {ZEALOT_Q_MIN};
 __device__ const float D_Q_MAX[NUM_ACTIONS] = {ZEALOT_Q_MAX};
 
-const float KPS[NUM_ACTIONS] =
-    {100, 100, 100, 200, 40, 40, 100, 100, 100, 200, 40, 40};
-const float KDS[NUM_ACTIONS] =
-    {2.5f, 2.5f, 2.5f, 5, 2, 2, 2.5f, 2.5f, 2.5f, 5, 2, 2};
+const float KPS[WAIST_END] =
+    {100, 100, 100, 200, 40, 40, 100, 100, 100, 200, 40, 40, 300, 300, 300};
+const float KDS[WAIST_END] =
+    {2.5f, 2.5f, 2.5f, 5, 2, 2, 2.5f, 2.5f, 2.5f, 5, 2, 2, 5, 5, 5};
 
 const policy_api::Limits LIMITS =
     {VX_MIN, VX_MAX, VY_ABS, YAW_RATE_ABS, SPEED_NORM};

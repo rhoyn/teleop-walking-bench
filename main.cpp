@@ -1734,9 +1734,15 @@ int run(
   float crane_kp[NUM_MOTOR], crane_kd[NUM_MOTOR];
   std::memcpy(crane_kp, kp, sizeof(kp));
   std::memcpy(crane_kd, kd, sizeof(kd));
-  for (int i = 0; i < pol->owned(); ++i) {
+  for (int i = 0; i < ARM_LEFT_FIRST; ++i) {
     kp[i] = pol->kp()[i];
     kd[i] = pol->kd()[i];
+  }
+  if (pol->owned() == NUM_MOTOR) {
+    for (int i = ARM_LEFT_FIRST; i < NUM_MOTOR; ++i) {
+      kp[i] = pol->kp()[i];
+      kd[i] = pol->kd()[i];
+    }
   }
 
   phys->set_gains(crane_kp, crane_kd);
