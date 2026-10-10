@@ -155,8 +155,6 @@ struct Policy : policy_api::Policy {
 
   void step(const policy_api::Ctx& c) override {
     const int threads = 128, blocks = (envs + threads - 1) / threads;
-    // Upstream HistoryWrapper.reset() zeroes the history and the first action
-    // is taken on that all-zero buffer; frames shift in from the next step.
     if (primed) {
       k_homie_obs<<<blocks, threads>>>(
           c.motor_q,
