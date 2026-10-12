@@ -355,6 +355,8 @@ constexpr double MIN_COMPLETION = 95.0;
 constexpr double MIN_ROTATE = 99.0;
 constexpr double MIN_DIRECTION = 95.0;
 constexpr double DEADZONE_MIN_SPEED = 0.025;
+constexpr double SMALL_LO = 0.05, SMALL_HI = 0.15;
+constexpr double STILL_CMD = 0.02;
 constexpr int DEADZONE_BINS = 50;
 constexpr int GAP_GRID = 201;
 constexpr size_t GAP_MIN_RUNS = 50;
@@ -553,35 +555,6 @@ Binned binned(
     out.q3.push_back(quantile(by[size_t(b)], 0.75));
   }
   return out;
-}
-
-struct Fit {
-  double slope, intercept, r2;
-};
-
-Fit fit_line(
-    const std::vector<double>& x,
-    const std::vector<double>& y
-) {
-  const double n = double(x.size());
-  double sx = 0, sy = 0, sxx = 0, sxy = 0;
-  for (size_t i = 0; i < x.size(); ++i) {
-    sx += x[i];
-    sy += y[i];
-    sxx += x[i] * x[i];
-    sxy += x[i] * y[i];
-  }
-  const double slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
-  const double intercept = (sy - slope * sx) / n;
-  double se = 0;
-  for (size_t i = 0; i < x.size(); ++i) {
-    const double e = y[i] - (slope * x[i] + intercept);
-    se += e * e;
-  }
-  const double mean = sy / n;
-  double st = 0;
-  for (const double v : y) st += (v - mean) * (v - mean);
-  return {slope, intercept, st > 0.0 ? 1.0 - se / st : 0.0};
 }
 
 struct Deadzone {
@@ -903,8 +876,6 @@ void key(
 
 struct Panel {
   std::string mode, gain;
-  double r2, slope;
-  std::vector<double> deadzones;
 };
 
 canvas::Image mode_tile(
@@ -942,7 +913,6 @@ canvas::Image mode_tile(
     lines_centre(im, ax, lines);
     return im;
   }
-  std::vector<double> all_x, all_y, zones;
   std::vector<std::string> notes;
   struct Trace {
     std::vector<double> x, y;
@@ -963,25 +933,21 @@ canvas::Image mode_tile(
     if (!x.empty()) {
       traces.push_back({x, y, ink});
       const std::optional<Deadzone> dz = deadzone(x, y);
-      zones.insert(zones.begin(), dz ? dz->command : 1.0);
       if (dz) deadzone_box(im, ax, *dz);
       note.push_back(
           upper(engine) + " DEADZONE " +
           (dz ? fmt("%.3f, FIRST SPEED %.3f ", dz->command, dz->speed) + unit
               : std::string("NONE"))
       );
-      all_x.insert(all_x.end(), x.begin(), x.end());
-      all_y.insert(all_y.end(), y.begin(), y.end());
     }
     notes.insert(notes.begin(), note.begin(), note.end());
   }
   for (const Trace& t : traces) draw_engine(im, ax, t.x, t.y, t.ink);
-  if (all_x.empty()) {
+  if (traces.empty()) {
     header(im, upper(mode), caption, "NO RUNS", "");
     return im;
   }
-  const Fit fit = fit_line(all_x, all_y);
-  panels.push_back({mode, gain, fit.r2, fit.slope, zones});
+  panels.push_back({mode, gain});
   header(im, upper(mode), caption, "", "");
   key(im,
       ax,
@@ -994,14 +960,70 @@ canvas::Image mode_tile(
   return im;
 }
 
+struct Precision {
+  double error, walk_right, walk_delivered, turn_right, turn_delivered;
+  std::map<std::string, double> drift;
+};
+
+double median(std::vector<double> v) { return quantile(v, 0.5); }
+
+Precision precision(
+    const fs::path& results,
+    const std::string& policy,
+    const std::string& gain
+) {
+  Precision pr{};
+  std::vector<double> walk_along, walk_ratio, walk_error;
+  std::vector<double> turn_along, turn_ratio, turn_error;
+  for (const std::string& engine : ENGINES) {
+    const Runs walk = read_runs(
+        batches(results / ("direction_gainx" + gain), policy, engine)
+    );
+    std::vector<double> still;
+    for (const Run& r : walk.complete) {
+      const double c = std::hypot(r.cmd_vx, r.cmd_vy);
+      if (c < STILL_CMD) still.push_back(std::hypot(r.vx, r.vy));
+      if (c < SMALL_LO || c >= SMALL_HI) continue;
+      const double along = (r.vx * r.cmd_vx + r.vy * r.cmd_vy) / c;
+      walk_along.push_back(along);
+      walk_ratio.push_back(along / c);
+      walk_error.push_back(std::hypot(r.vx - r.cmd_vx, r.vy - r.cmd_vy) / c);
+    }
+    pr.drift[engine] = still.empty() ? 0.0 : median(still);
+    const Runs turn =
+        read_runs(batches(results / ("rotate_gainx" + gain), policy, engine));
+    for (const Run& r : turn.complete) {
+      const double c = std::fabs(r.cmd_wz);
+      if (c < SMALL_LO || c >= SMALL_HI) continue;
+      const double along = r.wz * std::copysign(1.0, r.cmd_wz);
+      turn_along.push_back(along);
+      turn_ratio.push_back(along / c);
+      turn_error.push_back(
+          (std::fabs(r.wz - r.cmd_wz) + std::hypot(r.vx, r.vy)) / c
+      );
+    }
+  }
+  auto share = [](const std::vector<double>& v) {
+    if (v.empty()) return 0.0;
+    return double(std::count_if(
+               v.begin(),
+               v.end(),
+               [](double a) { return a >= DEADZONE_MIN_SPEED; }
+           )) /
+           double(v.size());
+  };
+  pr.walk_right = share(walk_along);
+  pr.turn_right = share(turn_along);
+  pr.walk_delivered = walk_ratio.empty() ? 0.0 : median(walk_ratio);
+  pr.turn_delivered = turn_ratio.empty() ? 0.0 : median(turn_ratio);
+  pr.error = 0.5 * ((walk_error.empty() ? 1.0 : median(walk_error)) +
+                    (turn_error.empty() ? 1.0 : median(turn_error)));
+  return pr;
+}
+
 struct Score {
   std::string policy, gain;
-  double r2;
-  std::map<std::string, double> mode_r2, mode_deadzone, mode_slope;
-  int rank_walk = 0, rank_rotate = 0, rank_walk_zone = 0, rank_rotate_zone = 0;
-  int rank_sum() const {
-    return rank_walk + rank_rotate + rank_walk_zone + rank_rotate_zone;
-  }
+  Precision pr;
 };
 
 void write_sheet(
@@ -1236,75 +1258,53 @@ int main(
       }
     }
     for (const std::string& gain : GAINS) {
-      double r2 = 0.0;
-      int n_r2 = 0;
-      std::map<std::string, double> mode_r2, mode_zone, mode_slope;
-      for (const Panel& p : panels) {
-        if (p.gain != gain) continue;
-        r2 += p.r2;
-        ++n_r2;
-        mode_r2[p.mode] = p.r2;
-        mode_slope[p.mode] = p.slope;
-        double panel_zone = 0.0;
-        for (const double z : p.deadzones) panel_zone += z;
-        mode_zone[p.mode] = panel_zone / double(p.deadzones.size());
+      if (std::none_of(panels.begin(), panels.end(), [&](const Panel& p) {
+            return p.gain == gain;
+          })) {
+        continue;
       }
-      if (n_r2 == 0) continue;
-      scores.push_back(
-          {policy, gain, r2 / n_r2, mode_r2, mode_zone, mode_slope}
-      );
+      scores.push_back({policy, gain, precision(results, policy, gain)});
       break;
     }
   }
-  auto rank = [&](auto key, auto set) {
-    std::vector<size_t> order(scores.size());
-    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-      return key(scores[a]) < key(scores[b]);
-    });
-    for (size_t r = 0; r < order.size(); ++r) set(scores[order[r]], int(r) + 1);
-  };
-  rank(
-      [](const Score& s) { return -s.mode_r2.at("direction"); },
-      [](Score& s, int r) { s.rank_walk = r; }
-  );
-  rank(
-      [](const Score& s) { return -s.mode_r2.at("rotate"); },
-      [](Score& s, int r) { s.rank_rotate = r; }
-  );
-  rank(
-      [](const Score& s) { return s.mode_deadzone.at("direction"); },
-      [](Score& s, int r) { s.rank_walk_zone = r; }
-  );
-  rank(
-      [](const Score& s) { return s.mode_deadzone.at("rotate"); },
-      [](Score& s, int r) { s.rank_rotate_zone = r; }
-  );
   std::stable_sort(
       scores.begin(),
       scores.end(),
-      [](const Score& a, const Score& b) {
-        return a.rank_sum() != b.rank_sum() ? a.rank_sum() < b.rank_sum()
-                                            : a.r2 > b.r2;
-      }
+      [](const Score& a, const Score& b) { return a.pr.error < b.pr.error; }
   );
   std::printf(
-      "%-5s %-26s %-5s %13s %13s %13s %13s %4s\n",
+      "%-5s %-26s %-5s %6s %10s %10s %15s %10s %10s\n",
       "",
       "policy",
       "gain",
-      "walk R2",
-      "rotate R2",
-      "walk zone",
-      "rotate zone",
-      "sum"
+      "error",
+      "walk right",
+      "walk deliv",
+      "drift mj/px",
+      "turn right",
+      "turn deliv"
   );
-  std::string table =
-      "| # | policy | legs<br>KP/KD | "
-      "linear<br>real<br>vs<br>commanded<br>walk<br>speed | "
-      "linear<br>real<br>vs<br>commanded<br>rotation<br>speed | "
-      "walk<br>speed<br>deadzone | rotation<br>speed<br>deadzone |\n"
-      "|---:|---|---:|---:|---:|---:|---:|\n";
+  const std::string head =
+      "| # | policy | legs<br>KP/KD | error | walk:<br>right<br>way | "
+      "walk:<br>delivered | drift<br>at zero m/s<br>MuJoCo / PhysX | "
+      "turn:<br>right<br>way | turn:<br>delivered |\n"
+      "|---:|---|---:|---:|---:|---:|---:|---:|---:|\n";
+  const std::string metrics =
+      "Precision is scored on small commands, " + fmt("%g", SMALL_LO) + " to " +
+      fmt("%g", SMALL_HI) +
+      " m/s or rad/s, by movement along the command, both engines pooled, "
+      "at the first accepted gain (x1.0, else x1.5, else x2.0). Error is the "
+      "median distance between measured and commanded velocity relative to "
+      "the command, walk and turn averaged (in rotate the planar drift counts "
+      "as error): 0% is perfect, 100% is what standing still scores, above "
+      "100% the robot moves the wrong way. Right way is the share of runs "
+      "moving at least " +
+      fmt("%g", DEADZONE_MIN_SPEED) +
+      " along the command; delivered is the median fraction of the command "
+      "achieved along it; drift at zero is the median planar speed for "
+      "direction commands under " +
+      fmt("%g", STILL_CMD) + " m/s. Rows are ordered by error.\n\n";
+  std::string table = head;
   std::string md =
       "# Commanded vs measured movement\n\n"
       "Generated by `build/cmd_vs_real_movements` from "
@@ -1317,56 +1317,39 @@ int main(
       "% over both engines and benchmarks, and a gain is drawn when rotate "
       "completes > " +
       fmt("%g", MIN_ROTATE) + "% and direction > " + fmt("%g", MIN_DIRECTION) +
-      "% at it.\n\n"
-      "Ranking uses the first accepted gain (x1.0, else x1.5, else x2.0): "
-      "linear real vs commanded walk speed (direction) and rotation speed "
-      "(rotate) are R^2 of the line fitted to measured vs commanded with both "
-      "engines pooled, the share of the measured speed's variance the line "
-      "explains, higher is better; the walk and "
-      "rotation deadzones are the command "
-      "needed to reach a measured " +
-      fmt("%g", DEADZONE_MIN_SPEED) +
-      ", averaged over both engines (1.0 when never reached). Each of the four "
-      "is ranked on its own, 1 = lowest, and policies are "
-      "ordered by the sum of the four ranks.\n\n"
-      "| # | policy | legs<br>KP/KD | "
-      "linear<br>real<br>vs<br>commanded<br>walk<br>speed | "
-      "linear<br>real<br>vs<br>commanded<br>rotation<br>speed | "
-      "walk<br>speed<br>deadzone | rotation<br>speed<br>deadzone |\n"
-      "|---:|---|---:|---:|---:|---:|---:|\n";
-  auto linearity = [](double r2) {
-    return fmt("%.0f%%", std::round(r2 * 100.0));
-  };
-  auto cell = [](double v, int r) {
-    return fmt("%.4f", v) + " (" + std::to_string(r) + ")";
-  };
+      "% at it.\n\n" + metrics + head;
+  auto pct = [](double v) { return fmt("%.0f%%", std::round(v * 100.0)); };
   for (size_t i = 0; i < scores.size(); ++i) {
     const Score& sc = scores[i];
+    const Precision& pr = sc.pr;
     char prefix[8];
-    std::snprintf(prefix, sizeof(prefix), "%03zu_", i);
+    std::snprintf(prefix, sizeof(prefix), "%03zu_", i % 1000);
     std::vector<canvas::Image>& tiles = sheets.at(sc.policy);
     write_sheet(tiles, SHEET_COLS, out / (prefix + sc.policy + ".png"));
     tiles.clear();
     const std::string values =
-        " | x" + sc.gain + " | " + linearity(sc.mode_r2.at("direction")) +
-        " | " + linearity(sc.mode_r2.at("rotate")) + " | " +
-        fmt("%.4f", sc.mode_deadzone.at("direction")) + " | " +
-        fmt("%.4f", sc.mode_deadzone.at("rotate")) + " |\n";
+        " | x" + sc.gain + " | " + pct(pr.error) + " | " + pct(pr.walk_right) +
+        " | " + fmt("%.2f", std::max(pr.walk_delivered, 0.0)) + " | " +
+        fmt("%.3f", pr.drift.at("mujoco")) + " / " +
+        fmt("%.3f", pr.drift.at("physx")) + " | " + pct(pr.turn_right) + " | " +
+        fmt("%.2f", std::max(pr.turn_delivered, 0.0)) + " |\n";
     table += "| " + std::to_string(i) + " | [`" + sc.policy + "`](" +
              (out / (prefix + sc.policy + ".png")).generic_string() + ")" +
              values;
     md += "| " + std::to_string(i) + " | [`" + sc.policy + "`](" + prefix +
           sc.policy + ".png)" + values;
     std::printf(
-        "%-5s %-26s x%-4s %13s %13s %13s %13s %4d\n",
+        "%-5s %-26s x%-4s %6s %10s %10.2f %7.3f/%7.3f %10s %10.2f\n",
         prefix,
         sc.policy.c_str(),
         sc.gain.c_str(),
-        cell(sc.mode_r2.at("direction"), sc.rank_walk).c_str(),
-        cell(sc.mode_r2.at("rotate"), sc.rank_rotate).c_str(),
-        cell(sc.mode_deadzone.at("direction"), sc.rank_walk_zone).c_str(),
-        cell(sc.mode_deadzone.at("rotate"), sc.rank_rotate_zone).c_str(),
-        sc.rank_sum()
+        pct(pr.error).c_str(),
+        pct(pr.walk_right).c_str(),
+        pr.walk_delivered,
+        pr.drift.at("mujoco"),
+        pr.drift.at("physx"),
+        pct(pr.turn_right).c_str(),
+        pr.turn_delivered
     );
   }
   const auto gaps = yaw_gaps(results, policies);
@@ -1417,32 +1400,26 @@ int main(
       std::string punches;
       for (size_t k = 0; k < order.size(); ++k) {
         if (order[k].second != top.policy) continue;
-        punches =
-            "In the punch tour above it survives " +
-            fmt("%.1f", -order[k].first) + " s on average, " +
-            std::to_string(k + 1) + " of " + std::to_string(order.size()) +
-            " (the best, `" + order.front().second + "`, " +
-            fmt("%.1f", -order.front().first) +
-            " s), so it is not the policy that stays up best under punches; "
-            "it is the one whose speed follows the walking and rotation "
-            "commands most cleanly.";
+        punches = "In the punch tour above it survives " +
+                  fmt("%.1f", -order[k].first) + " s on average, " +
+                  std::to_string(k + 1) + " of " +
+                  std::to_string(order.size()) + " (the best, `" +
+                  order.front().second + "`, " +
+                  fmt("%.1f", -order.front().first) + " s).";
       }
-      best =
-          "![" + top.policy + "](" + chart.generic_string() + ")\n\n`" +
-          top.policy + "` ranks first at legs KP/KD x" + top.gain +
-          ". Its measured speed follows a straight line through the command "
-          "in both benchmarks, R\u00b2 " +
-          fmt("%.0f%%", std::round(top.mode_r2.at("direction") * 100.0)) +
-          " walking and " +
-          fmt("%.0f%%", std::round(top.mode_r2.at("rotate") * 100.0)) +
-          " turning, and it starts moving almost at once, with deadzones of " +
-          fmt("%.3f", top.mode_deadzone.at("direction")) + " m/s and " +
-          fmt("%.3f", top.mode_deadzone.at("rotate")) +
-          " rad/s. The line is not y = x: it walks and turns at about " +
-          fmt("%.0f%%", top.mode_slope.at("direction") * 100.0) + " and " +
-          fmt("%.0f%%", top.mode_slope.at("rotate") * 100.0) +
-          " of the command, a constant gain a teleop mapping can scale away. " +
-          punches + "\n";
+      const Precision& pr = top.pr;
+      best = "![" + top.policy + "](" + chart.generic_string() + ")\n\n`" +
+             top.policy + "` ranks first at legs KP/KD x" + top.gain +
+             ", with " + pct(pr.error) +
+             " error on small commands. It moves the commanded way in " +
+             pct(pr.walk_right) + " of small walking commands and " +
+             pct(pr.turn_right) + " of small turns, delivers " +
+             fmt("%.0f%%", pr.walk_delivered * 100.0) + " and " +
+             fmt("%.0f%%", pr.turn_delivered * 100.0) +
+             " of them, and drifts " + fmt("%.3f", pr.drift.at("mujoco")) +
+             " / " + fmt("%.3f", pr.drift.at("physx")) +
+             " m/s (MuJoCo / PhysX) when asked to stand still. " + punches +
+             "\n";
     }
     const std::string section =
         begin + "\n" +
@@ -1454,21 +1431,12 @@ int main(
         "KP/KD x1.0, x1.5 and x2.0 for 4096 run ids each into "
         "`results/<mode>_gainx<G>/`, and `build/cmd_vs_real_movements` charts "
         "measured against commanded speed into `" +
-        out.generic_string() +
-        "/`. Linear real vs commanded is R^2 of the line fitted to measured vs "
-        "commanded with both engines pooled, the share of the measured speed's "
-        "variance the line explains, higher is better; deadzone is the "
-        "command needed to reach a measured " +
-        fmt("%g", DEADZONE_MIN_SPEED) +
-        ", averaged over both engines. Policies are listed when their legs "
-        "KP/KD x1.0 runs complete > " +
+        out.generic_string() + "/`. " + metrics +
+        "Policies are listed when their legs KP/KD x1.0 runs complete > " +
         fmt("%g", MIN_COMPLETION) +
         "% on average and at least one gain completes > " +
         fmt("%g", MIN_ROTATE) + "% in rotate and > " +
-        fmt("%g", MIN_DIRECTION) +
-        "% in direction; values are at the first such gain, and the order sums "
-        "each column's rank, 1 = lowest.\n\n" +
-        table + "\n" + best +
+        fmt("%g", MIN_DIRECTION) + "% in direction.\n\n" + table + "\n" + best +
         "\nMuJoCo and PhysX differ in yaw-rate tracking by " +
         fmt("%.3f", gap_mean) +
         " on average (area between the engines' median curves at x1.0), from " +

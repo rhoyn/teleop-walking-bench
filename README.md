@@ -236,36 +236,38 @@ lower-body balance under external upper-body control.
 ## Commanded vs measured movement
 
 <!-- cmd_vs_real_movements:begin -->
-Each run holds one command for 10 s, with no punches: a yaw rate in `--mode rotate`, a planar velocity in `--mode direction`, both drawn uniformly per run id up to 1 rad/s and 1 m/s. `./benchmark.sh --benchmark rotate|direction` runs every policy at legs KP/KD x1.0, x1.5 and x2.0 for 4096 run ids each into `results/<mode>_gainx<G>/`, and `build/cmd_vs_real_movements` charts measured against commanded speed into `results/cmd_vs_real_movements/`. Linear real vs commanded is R^2 of the line fitted to measured vs commanded with both engines pooled, the share of the measured speed's variance the line explains, higher is better; deadzone is the command needed to reach a measured 0.025, averaged over both engines. Policies are listed when their legs KP/KD x1.0 runs complete > 95% on average and at least one gain completes > 99% in rotate and > 95% in direction; values are at the first such gain, and the order sums each column's rank, 1 = lowest.
+Each run holds one command for 10 s, with no punches: a yaw rate in `--mode rotate`, a planar velocity in `--mode direction`, both drawn uniformly per run id up to 1 rad/s and 1 m/s. `./benchmark.sh --benchmark rotate|direction` runs every policy at legs KP/KD x1.0, x1.5 and x2.0 for 4096 run ids each into `results/<mode>_gainx<G>/`, and `build/cmd_vs_real_movements` charts measured against commanded speed into `results/cmd_vs_real_movements/`. Precision is scored on small commands, 0.05 to 0.15 m/s or rad/s, by movement along the command, both engines pooled, at the first accepted gain (x1.0, else x1.5, else x2.0). Error is the median distance between measured and commanded velocity relative to the command, walk and turn averaged (in rotate the planar drift counts as error): 0% is perfect, 100% is what standing still scores, above 100% the robot moves the wrong way. Right way is the share of runs moving at least 0.025 along the command; delivered is the median fraction of the command achieved along it; drift at zero is the median planar speed for direction commands under 0.02 m/s. Rows are ordered by error.
 
-| # | policy | legs<br>KP/KD | linear<br>real<br>vs<br>commanded<br>walk<br>speed | linear<br>real<br>vs<br>commanded<br>rotation<br>speed | walk<br>speed<br>deadzone | rotation<br>speed<br>deadzone |
-|---:|---|---:|---:|---:|---:|---:|
-| 0 | [`openwbt`](results/cmd_vs_real_movements/000_openwbt.png) | x1.0 | 93% | 99% | 0.0095 | 0.0505 |
-| 1 | [`gr00t_wbc_h074_p000`](results/cmd_vs_real_movements/001_gr00t_wbc_h074_p000.png) | x1.0 | 89% | 96% | 0.0530 | 0.0505 |
-| 2 | [`falcon`](results/cmd_vs_real_movements/002_falcon.png) | x1.0 | 61% | 98% | 0.0094 | 0.0402 |
-| 3 | [`handoff_with_arms`](results/cmd_vs_real_movements/003_handoff_with_arms.png) | x1.0 | 94% | 98% | 0.1108 | 0.1100 |
-| 4 | [`gr00t_wbc_h070_p000`](results/cmd_vs_real_movements/004_gr00t_wbc_h070_p000.png) | x1.0 | 79% | 95% | 0.0530 | 0.0710 |
-| 5 | [`mimic_lite`](results/cmd_vs_real_movements/005_mimic_lite.png) | x1.0 | 94% | 91% | 0.1617 | 0.0510 |
-| 6 | [`wbc_agile_velocity`](results/cmd_vs_real_movements/006_wbc_agile_velocity.png) | x1.0 | 86% | 100% | 0.1517 | 0.0926 |
-| 7 | [`gr00t_wbc_h066_p000`](results/cmd_vs_real_movements/007_gr00t_wbc_h066_p000.png) | x1.5 | 81% | 90% | 0.0621 | 0.0818 |
-| 8 | [`gr00t_wbc_h066_p012`](results/cmd_vs_real_movements/008_gr00t_wbc_h066_p012.png) | x1.5 | 80% | 91% | 0.0621 | 0.0818 |
-| 9 | [`asap`](results/cmd_vs_real_movements/009_asap.png) | x1.0 | 50% | 77% | 0.0094 | 0.0094 |
-| 10 | [`amo`](results/cmd_vs_real_movements/010_amo.png) | x1.0 | 88% | 86% | 0.1108 | 0.0710 |
-| 11 | [`decoupled_wbc_h066_p012`](results/cmd_vs_real_movements/011_decoupled_wbc_h066_p012.png) | x1.0 | 92% | 89% | 0.1000 | 0.1794 |
-| 12 | [`wbc_agile`](results/cmd_vs_real_movements/012_wbc_agile.png) | x1.0 | 97% | 86% | 0.1204 | 0.2908 |
-| 13 | [`zealot`](results/cmd_vs_real_movements/013_zealot.png) | x1.0 | 91% | 89% | 0.1108 | 0.1600 |
-| 14 | [`decoupled_wbc_h066_p000`](results/cmd_vs_real_movements/014_decoupled_wbc_h066_p000.png) | x1.0 | 90% | 88% | 0.1000 | 0.1794 |
-| 15 | [`clobot_with_arms`](results/cmd_vs_real_movements/015_clobot_with_arms.png) | x1.0 | 71% | 98% | 0.1408 | 0.1328 |
-| 16 | [`sonic`](results/cmd_vs_real_movements/016_sonic.png) | x1.0 | 89% | 93% | 0.1709 | 0.1305 |
-| 17 | [`decoupled_wbc_h070_p000`](results/cmd_vs_real_movements/017_decoupled_wbc_h070_p000.png) | x1.0 | 96% | 84% | 0.1309 | 0.2514 |
-| 18 | [`robomimic`](results/cmd_vs_real_movements/018_robomimic.png) | x1.0 | 78% | 96% | 0.1810 | 0.1599 |
-| 19 | [`homie`](results/cmd_vs_real_movements/019_homie.png) | x1.0 | 96% | 74% | 0.1810 | 0.6303 |
-| 20 | [`decoupled_wbc_h074_p000`](results/cmd_vs_real_movements/020_decoupled_wbc_h074_p000.png) | x1.0 | 95% | 65% | 0.1810 | 0.4111 |
-| 21 | [`rl_lab`](results/cmd_vs_real_movements/021_rl_lab.png) | x1.0 | 84% | 45% | 0.1602 | 0.4595 |
+Policies are listed when their legs KP/KD x1.0 runs complete > 95% on average and at least one gain completes > 99% in rotate and > 95% in direction.
 
-![openwbt](results/cmd_vs_real_movements/000_openwbt.png)
+| # | policy | legs<br>KP/KD | error | walk:<br>right<br>way | walk:<br>delivered | drift<br>at zero m/s<br>MuJoCo / PhysX | turn:<br>right<br>way | turn:<br>delivered |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 0 | [`gr00t_wbc_h074_p000`](results/cmd_vs_real_movements/000_gr00t_wbc_h074_p000.png) | x1.0 | 37% | 97% | 0.85 | 0.001 / 0.002 | 99% | 0.90 |
+| 1 | [`openwbt`](results/cmd_vs_real_movements/001_openwbt.png) | x1.0 | 62% | 90% | 0.79 | 0.042 / 0.053 | 99% | 0.75 |
+| 2 | [`gr00t_wbc_h070_p000`](results/cmd_vs_real_movements/002_gr00t_wbc_h070_p000.png) | x1.0 | 65% | 80% | 0.58 | 0.001 / 0.002 | 86% | 0.59 |
+| 3 | [`gr00t_wbc_h066_p012`](results/cmd_vs_real_movements/003_gr00t_wbc_h066_p012.png) | x1.5 | 69% | 85% | 0.53 | 0.001 / 0.001 | 83% | 0.60 |
+| 4 | [`wbc_agile_velocity`](results/cmd_vs_real_movements/004_wbc_agile_velocity.png) | x1.0 | 75% | 11% | 0.02 | 0.002 / 0.001 | 69% | 0.54 |
+| 5 | [`gr00t_wbc_h066_p000`](results/cmd_vs_real_movements/005_gr00t_wbc_h066_p000.png) | x1.5 | 77% | 77% | 0.53 | 0.001 / 0.001 | 81% | 0.59 |
+| 6 | [`zealot`](results/cmd_vs_real_movements/006_zealot.png) | x1.0 | 85% | 50% | 0.36 | 0.011 / 0.001 | 21% | 0.09 |
+| 7 | [`wbc_agile`](results/cmd_vs_real_movements/007_wbc_agile.png) | x1.0 | 88% | 37% | 0.11 | 0.003 / 0.003 | 16% | 0.17 |
+| 8 | [`sonic`](results/cmd_vs_real_movements/008_sonic.png) | x1.0 | 93% | 6% | 0.01 | 0.006 / 0.007 | 44% | 0.22 |
+| 9 | [`mimic_lite`](results/cmd_vs_real_movements/009_mimic_lite.png) | x1.0 | 96% | 10% | 0.01 | 0.009 / 0.005 | 49% | 0.26 |
+| 10 | [`clobot_with_arms`](results/cmd_vs_real_movements/010_clobot_with_arms.png) | x1.0 | 97% | 17% | 0.00 | 0.001 / 0.001 | 28% | 0.07 |
+| 11 | [`decoupled_wbc_h070_p000`](results/cmd_vs_real_movements/011_decoupled_wbc_h070_p000.png) | x1.0 | 99% | 26% | 0.01 | 0.001 / 0.010 | 24% | 0.03 |
+| 12 | [`handoff_with_arms`](results/cmd_vs_real_movements/012_handoff_with_arms.png) | x1.0 | 99% | 48% | 0.01 | 0.000 / 0.000 | 51% | 0.52 |
+| 13 | [`decoupled_wbc_h074_p000`](results/cmd_vs_real_movements/013_decoupled_wbc_h074_p000.png) | x1.0 | 100% | 11% | 0.00 | 0.001 / 0.001 | 1% | 0.01 |
+| 14 | [`homie`](results/cmd_vs_real_movements/014_homie.png) | x1.0 | 100% | 14% | 0.00 | 0.001 / 0.001 | 0% | 0.01 |
+| 15 | [`rl_lab`](results/cmd_vs_real_movements/015_rl_lab.png) | x1.0 | 100% | 24% | 0.01 | 0.001 / 0.002 | 0% | 0.01 |
+| 16 | [`decoupled_wbc_h066_p012`](results/cmd_vs_real_movements/016_decoupled_wbc_h066_p012.png) | x1.0 | 100% | 29% | 0.00 | 0.000 / 0.124 | 25% | 0.02 |
+| 17 | [`amo`](results/cmd_vs_real_movements/017_amo.png) | x1.0 | 100% | 44% | 0.05 | 0.002 / 0.005 | 77% | 1.07 |
+| 18 | [`robomimic`](results/cmd_vs_real_movements/018_robomimic.png) | x1.0 | 101% | 13% | 0.00 | 0.004 / 0.004 | 20% | 0.08 |
+| 19 | [`decoupled_wbc_h066_p000`](results/cmd_vs_real_movements/019_decoupled_wbc_h066_p000.png) | x1.0 | 101% | 32% | 0.00 | 0.001 / 0.153 | 27% | 0.01 |
+| 20 | [`falcon`](results/cmd_vs_real_movements/020_falcon.png) | x1.0 | 135% | 69% | 0.82 | 0.132 / 0.112 | 100% | 0.95 |
+| 21 | [`asap`](results/cmd_vs_real_movements/021_asap.png) | x1.0 | 172% | 69% | 0.75 | 0.129 / 0.117 | 66% | 0.52 |
 
-`openwbt` ranks first at legs KP/KD x1.0. Its measured speed follows a straight line through the command in both benchmarks, R² 93% walking and 99% turning, and it starts moving almost at once, with deadzones of 0.010 m/s and 0.051 rad/s. The line is not y = x: it walks and turns at about 74% and 74% of the command, a constant gain a teleop mapping can scale away. In the punch tour above it survives 33.7 s on average, 23 of 42 (the best, `gr00t_wbc_h066_p012`, 83.6 s), so it is not the policy that stays up best under punches; it is the one whose speed follows the walking and rotation commands most cleanly.
+![gr00t_wbc_h074_p000](results/cmd_vs_real_movements/000_gr00t_wbc_h074_p000.png)
+
+`gr00t_wbc_h074_p000` ranks first at legs KP/KD x1.0, with 37% error on small commands. It moves the commanded way in 97% of small walking commands and 99% of small turns, delivers 85% and 90% of them, and drifts 0.001 / 0.002 m/s (MuJoCo / PhysX) when asked to stand still. In the punch tour above it survives 80.1 s on average, 8 of 42 (the best, `gr00t_wbc_h066_p012`, 83.6 s).
 
 MuJoCo and PhysX differ in yaw-rate tracking by 0.049 on average (area between the engines' median curves at x1.0), from `amo` closest to `decoupled_wbc_h066_p000` furthest; per policy in [results/cmd_vs_real_movements/README.md](results/cmd_vs_real_movements/README.md).
 <!-- cmd_vs_real_movements:end -->
