@@ -2,40 +2,80 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+usage() {
+  echo "usage: $0 [--benchmark tour|rotate|direction]" >&2
+  exit 2
+}
+MODE=tour
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --benchmark) [ $# -ge 2 ] || usage; MODE=$2; shift 2 ;;
+    --benchmark=*) MODE=${1#*=}; shift ;;
+    *) usage ;;
+  esac
+done
+case "$MODE" in
+  tour | rotate | direction) ;;
+  *) usage ;;
+esac
+
 NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "  MIG " || true)
 [ "$NGPUS" -ge 1 ] || NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "^GPU " || true)
 [ "$NGPUS" -ge 1 ] || NGPUS=1
 JOBS=${JOBS:-$((8 * NGPUS))}
 RUNID=${RUNID:-0}
+[ "$MODE" = tour ] || RUNID=0
 NICE=${NICE:-10}
 CPUS=1-$(($(nproc) - 1))
-WORK=${WORK:-build/preview-clips}
-VIDEO=${VIDEO:-assets/preview.mp4}
-IMAGE=${IMAGE:-assets/preview.jpg}
-STILL=${STILL:-44.6}
+if [ "$MODE" = tour ]; then
+  WORK=${WORK:-build/preview-clips}
+  VIDEO=${VIDEO:-assets/preview.mp4}
+  IMAGE=${IMAGE:-assets/preview.jpg}
+  STILL=${STILL:-44.6}
+else
+  WORK=${WORK:-build/preview-clips-$MODE}
+  VIDEO=${VIDEO:-assets/preview_$MODE.mp4}
+  IMAGE=${IMAGE:-assets/preview_$MODE.jpg}
+  STILL=${STILL:-9}
+fi
 FPS=${FPS:-60}
 CRF=${CRF:-20}
 MAX_BYTES=${MAX_BYTES:-10000000}
 BIN=${BIN:-build/teleop-walking-benchmark}
 DELAY=${DELAY:-20}
-export RUNID NICE CPUS WORK BIN DELAY
+export MODE RUNID NICE CPUS WORK BIN DELAY SCALE
 
-COLS=10 ROWS=9 TW=128 TH=72 OW=1280 OH=720 BG=0x3D9356
+SCALE=1
+[ "$MODE" = tour ] || SCALE=${SCALE_MOVEMENTS:-2}
+COLS=10 ROWS=9 BG=0x3D9356
+TW=$((128 * SCALE)) TH=$((72 * SCALE)) OW=1280 OH=720
 FONT=assets/JetBrainsMono.ttf
 ENGINES=${ENGINES:-"physx mujoco"}
 
-POLICIES=${POLICIES:-$(build/table results/punches_gainx1.0/*.csv | sed 's/`<br>`/_/' |
-  sed -n 's/^| ~*`\([a-z0-9_]*\)`.*/\1/p')}
+if [ "$MODE" = tour ]; then
+  POLICIES=${POLICIES:-$(build/table results/punches_gainx1.0/*.csv | sed 's/`<br>`/_/' |
+    sed -n 's/^| ~*`\([a-z0-9_]*\)`.*/\1/p')}
+else
+  POLICIES=${POLICIES:-$(ls results/cmd_vs_real_movements/[0-9][0-9][0-9]_*.png |
+    sed 's|.*/[0-9]*_\(.*\)\.png|\1|')}
+fi
+[ -n "$POLICIES" ] || { echo "no policies to record" >&2; exit 1; }
 TOTAL=$(($(echo $POLICIES | wc -w) * $(echo $ENGINES | wc -w)))
 export TOTAL
+if [ "$MODE" != tour ]; then
+  COLS=$((4 * $(echo $ENGINES | wc -w)))
+  TW=$((OW / COLS)) TH=$(((OW / COLS * 9 / 16 + 1) / 2 * 2))
+  ROWS=$(((TOTAL + COLS) / COLS))
+  OH=$((ROWS * TH))
+fi
 [ "$TOTAL" -lt $((COLS * ROWS)) ] ||
   { echo "$TOTAL clips + label do not fit ${COLS}x${ROWS} tiles" >&2; exit 1; }
 
 RUN='
   out=$WORK/$1/$0
   sleep $((RANDOM % (DELAY + 1)))
-  nice -n "$NICE" taskset -c "$CPUS" "$BIN" --engine "$1" --policy "$0" \
-    --runid "$RUNID" --record "$WORK/$1" --csv "$out.csv" \
+  nice -n "$NICE" taskset -c "$CPUS" "$BIN" --mode "$MODE" --engine "$1" --policy "$0" \
+    --runid "$RUNID" --record "$WORK/$1" --record-scale "$SCALE" --csv "$out.csv" \
     >"$out.log" 2>&1 &&
     echo "[$(ls "$WORK"/*/*.mp4 2>/dev/null | wc -l)/$TOTAL] $0 on $1" ||
     echo "FAILED $0 on $1" >&2'
@@ -65,8 +105,8 @@ pad=$(((OH - ROWS * TH) / 2))
 
 FILTER="$scale$stack
   pad=$OW:$OH:0:$pad:color=$BG,
-  drawtext=fontfile=$FONT:text='r h o y n':fontcolor=white:fontsize=10
-    :x=$((n % COLS * TW + 37)):y=$((n / COLS * TH + pad + 30)),
+  drawtext=fontfile=$FONT:text='r h o y n':fontcolor=white:fontsize=$((10 * TW / 128))
+    :x=$((n % COLS * TW + 37 * TW / 128)):y=$((n / COLS * TH + pad + 30 * TH / 72)),
   format=yuv420p"
 
 echo "combining $n clips"

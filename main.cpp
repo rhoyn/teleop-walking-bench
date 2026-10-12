@@ -841,6 +841,8 @@ constexpr double MODE_S = 10.0;
 constexpr double MODE_SETTLE_S = 2.0;
 constexpr double MODE_YAW_RATE_MAX = 1.0;
 constexpr double MODE_SPEED_MAX = 1.0;
+constexpr double PREVIEW_YAW_RATE = -0.1;
+constexpr double PREVIEW_SPEED = 0.1;
 
 constexpr double PUNCH_HOLD_S = 0.5;
 constexpr double PUNCH_ARROW_SCALE = 2.0;
@@ -938,6 +940,11 @@ void mode_command_make(
     Run& r,
     Mode mode
 ) {
+  if (r.run_id == 0) {
+    if (mode == Mode::kRotate) r.want[2] = PREVIEW_YAW_RATE;
+    if (mode == Mode::kDirection) r.want[0] = PREVIEW_SPEED;
+    return;
+  }
   std::mt19937 rng = random_for(r.run_id, STREAM_COMMAND);
   if (mode == Mode::kRotate) {
     r.want[2] = random_between(rng, -MODE_YAW_RATE_MAX, MODE_YAW_RATE_MAX);
@@ -1347,7 +1354,8 @@ std::unique_ptr<Preview> preview_open(
     const mjcf::Model& model,
     const std::string& path,
     const std::vector<std::string>& label,
-    bool visible
+    bool visible,
+    int record_scale
 ) {
   auto v = std::make_unique<Preview>();
   char err[1000] = "";
@@ -1396,8 +1404,8 @@ std::unique_ptr<Preview> preview_open(
   mjv_defaultScene(&v->scene);
   mjr_defaultContext(&v->context);
   mjv_makeScene(v->m, &v->scene, 2000);
-  v->m->vis.global.offwidth = RECORD_WIDTH;
-  v->m->vis.global.offheight = RECORD_HEIGHT;
+  v->m->vis.global.offwidth = RECORD_WIDTH * record_scale;
+  v->m->vis.global.offheight = RECORD_HEIGHT * record_scale;
   mjr_makeContext(v->m, &v->context, mjFONTSCALE_150);
 
   const double design = -45.0 * M_PI / 180.0;
@@ -1425,8 +1433,13 @@ struct Recorder {
   std::string partial;
 };
 
-std::unique_ptr<Recorder> recorder_open(const std::string& path) {
+std::unique_ptr<Recorder> recorder_open(
+    const std::string& path,
+    int record_scale
+) {
   auto r = std::make_unique<Recorder>();
+  r->width = RECORD_WIDTH * record_scale;
+  r->height = RECORD_HEIGHT * record_scale;
   r->path = path;
   r->partial = path + ".tmp";
   r->rgb.assign(size_t(r->width) * size_t(r->height) * 3, 0);
@@ -1690,6 +1703,7 @@ int run(
   double realtime = 0.0;
   bool preview_on = false;
   std::string record_dir;
+  int record_scale = 1;
   bool plan_only = false;
   std::string trace;
   Mode mode = Mode::kTour;
@@ -1742,6 +1756,8 @@ int run(
       preview_on = true;
     else if (!std::strcmp(argv[i], "--record") && i + 1 < argc)
       record_dir = argv[++i];
+    else if (!std::strcmp(argv[i], "--record-scale") && i + 1 < argc)
+      record_scale = std::max(1, std::atoi(argv[++i]));
     else if (!std::strcmp(argv[i], "--plan-only"))
       plan_only = true;
     else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc)
@@ -1775,7 +1791,9 @@ int run(
           "                    in 0..360 deg per run; both write commanded and "
           "measured\n"
           "                    vx, vy, yaw rate from t = %g s to the end or "
-          "the fall\n"
+          "the fall;\n"
+          "                    run id 0 is fixed for previews: rotate %g rad/s "
+          "(right), direction %g m/s ahead\n"
           "  --leg-gain S      scale the policy's leg kp and kd by S (default "
           "1)\n"
           "  --seconds S       walking time per run (default %g, %g in rotate "
@@ -1785,6 +1803,7 @@ int run(
           "  --realtime R      pace the run at R times the wall clock\n"
           "  --preview         watch one robot in a window\n"
           "  --record DIR      write DIR/NAME.mp4 for one robot\n"
+          "  --record-scale N  record at N times the 160x90 default size\n"
           "  --plan-only       build the TensorRT plan for this batch, then "
           "exit\n"
           "  --trace PATH      robot and target pose every 25 ms\n"
@@ -1793,6 +1812,8 @@ int run(
           MODE_YAW_RATE_MAX,
           MODE_SPEED_MAX,
           MODE_SETTLE_S,
+          PREVIEW_YAW_RATE,
+          PREVIEW_SPEED,
           WALK_S,
           MODE_S
       );
@@ -1915,11 +1936,18 @@ int run(
         engine == PhysicsEngine::kMujoco ? "mujoco" : "physx",
         policy_name
     };
-    preview = preview_open(model, "assets/g1_29dof.xml", label, preview_on);
+    preview = preview_open(
+        model,
+        "assets/g1_29dof.xml",
+        label,
+        preview_on,
+        record_scale
+    );
   }
   if (!record_dir.empty()) {
     std::filesystem::create_directories(record_dir);
-    recorder = recorder_open(record_dir + "/" + policy_name + ".mp4");
+    recorder =
+        recorder_open(record_dir + "/" + policy_name + ".mp4", record_scale);
   }
 
   phys->reset(STANCE, 0.793);
