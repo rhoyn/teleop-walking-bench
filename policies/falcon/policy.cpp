@@ -65,8 +65,8 @@ __global__ void k_falcon_obs(
   const bool walking = (vx != 0.0f) || (vy != 0.0f) || (wz != 0.0f);
 
   const float speed = sqrtf(vx * vx + vy * vy);
-  if (speed > 1e-9f) {
-    const float dist = task[size_t(env) * 4 + 0];
+  const float dist = task[size_t(env) * 4 + 0];
+  if (speed > 1e-9f && dist > 0.0f) {
     const float want = fminf(CMD_KP_POS * dist, SPEED_NORM);
     const float scale = want / speed;
     vx = fminf(fmaxf(vx * scale, VX_MIN), VX_MAX);

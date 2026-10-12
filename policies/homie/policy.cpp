@@ -53,9 +53,10 @@ __global__ void k_homie_obs(
   const float dist = task[env * 4 + 0];
   const float yaw_err = task[env * 4 + 1];
 
+  const bool target = dist > 0.0f;
   const bool translating = drive[0] != 0.0f || drive[1] != 0.0f;
   float bearing = 0.0f, face_w = 0.0f;
-  if (translating) {
+  if (translating && target) {
     bearing = atan2f(drive[1], drive[0]);
     face_w = fminf(
         fmaxf((dist - FACE_NEAR_M) / (FACE_FAR_M - FACE_NEAR_M), 0.0f),
@@ -73,7 +74,7 @@ __global__ void k_homie_obs(
         2.0f * float(M_PI)
     );
     drive[2] = fminf(fmaxf(YAW_P * blended, -YAW_RATE_ABS), YAW_RATE_ABS);
-  } else if (drive[2] != 0.0f) {
+  } else if (drive[2] != 0.0f && target) {
     drive[2] = fminf(fmaxf(YAW_P * yaw_err, -YAW_RATE_ABS), YAW_RATE_ABS);
   }
 

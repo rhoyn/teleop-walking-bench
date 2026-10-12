@@ -102,7 +102,9 @@ __global__ void k_asap_obs(
 
   const float dist = task[env * 4 + 0];
   const float yaw_err = fabsf(task[env * 4 + 1]);
-  if (walk_latch[env] != 0) {
+  if (dist <= 0.0f) {
+    walk_latch[env] = c[0] != 0.0f || c[1] != 0.0f || c[2] != 0.0f;
+  } else if (walk_latch[env] != 0) {
     if (dist < WALK_EXIT_POS_M && yaw_err < WALK_EXIT_YAW_RAD) {
       walk_latch[env] = 0;
     }
