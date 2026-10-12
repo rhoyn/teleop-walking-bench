@@ -269,7 +269,31 @@ Policies are listed when their legs KP/KD x1.0 runs complete > 95% on average an
 
 `gr00t_wbc_h074_p000` ranks first at legs KP/KD x1.0, with 37% error on small commands. It moves the commanded way in 97% of small walking commands and 99% of small turns, delivers 85% and 90% of them, and drifts 0.001 / 0.002 m/s (MuJoCo / PhysX) when asked to stand still. In the punch tour above it survives 80.1 s on average, 8 of 42 (the best, `gr00t_wbc_h066_p012`, 83.6 s).
 
-MuJoCo and PhysX differ in yaw-rate tracking by 0.049 on average (area between the engines' median curves at x1.0), from `amo` closest to `decoupled_wbc_h066_p000` furthest; per policy in [results/cmd_vs_real_movements/README.md](results/cmd_vs_real_movements/README.md).
+MuJoCo and PhysX differ in yaw-rate tracking by 0.049 on average (area between the engines' median curves at x1.0), from `amo` closest to `decoupled_wbc_h066_p000` furthest:
+
+| policy | gap |
+|---|---:|
+| `amo` | 0.0048 |
+| `sonic` | 0.0081 |
+| `mimic_lite` | 0.0188 |
+| `handoff_with_arms` | 0.0206 |
+| `asap` | 0.0218 |
+| `zealot` | 0.0221 |
+| `clobot_with_arms` | 0.0232 |
+| `wbc_agile_velocity` | 0.0269 |
+| `homie` | 0.0320 |
+| `openwbt` | 0.0341 |
+| `wbc_agile` | 0.0369 |
+| `falcon` | 0.0536 |
+| `rl_lab` | 0.0585 |
+| `robomimic` | 0.0612 |
+| `gr00t_wbc_h070_p000` | 0.0646 |
+| `decoupled_wbc_h074_p000` | 0.0686 |
+| `gr00t_wbc_h074_p000` | 0.0929 |
+| `decoupled_wbc_h070_p000` | 0.1014 |
+| `decoupled_wbc_h066_p012` | 0.1141 |
+| `decoupled_wbc_h066_p000` | 0.1243 |
+| average | 0.0494 |
 <!-- cmd_vs_real_movements:end -->
 
 Run id 0 of each benchmark on every policy above, in rank order, PhysX and
