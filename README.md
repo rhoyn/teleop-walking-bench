@@ -33,7 +33,8 @@ MuJoCo through [MuJoCo Warp](https://github.com/google-deepmind/mujoco_warp).
 ./benchmark.sh          # whole field, both engines
 ```
 
-Batches write `results/punches/<tier>.r<NN>.<policy>.<engine>.csv`;
+Batches write `results/punches_gainx<G>/<tier>.r<NN>.<policy>.<engine>.csv`,
+one folder per leg gain (1.0, 1.5, 2.0: the policy's leg kp and kd scaled);
 `./build/table` renders the table, problems land in `benchmark.log`. Policies
 are TensorRT plans cached in `build/trt/`.
 
@@ -124,6 +125,76 @@ shipped.
 tracker follows reference motion that the harness has `sonic`'s planner
 generate from the same velocity command, since mimic-lite ships no planner of
 its own.
+
+### Leg gains
+
+Every policy was rerun with the kp and kd of its twelve leg joints scaled by
+1.5 and by 2.0, waist and arms untouched, on 1024 run ids per engine:
+`results/punches_gainx1.5/` and `results/punches_gainx2.0/` next to the
+native-gain `results/punches_gainx1.0/` above. Compared over the run ids all
+three share, 0-511 on both engines, stiffer legs make almost every policy
+worse.
+
+| `--policy` | mean survival sec<br>x1.0 / x1.5 / x2.0 | x1.5<br>diff | x2.0<br>diff | walk energy KJ<br>x1.0 / x1.5 / x2.0 | walk vibrations<br>x1.0 / x1.5 / x2.0 |
+|---:|---:|---:|---:|---:|---:|
+| `openwbt` | 33.7 / 4.9 / 2.5 | -85.4% | -92.5% | - / - / - | - / - / - |
+| `rl_gym` | 28.7 / 8.9 / 4.1 | -69.0% | -85.6% | - / - / - | - / - / - |
+| `schoi` | 30.2 / 14.1 / 3.7 | -53.2% | -87.9% | - / - / - | - / - / - |
+| `rl_lab` | 23.8 / 15.6 / 10.7 | -34.2% | -54.8% | - / - / - | - / - / - |
+| `wbc_agile` | 67.6 / 53.5 / 28.8 | -20.8% | -57.4% | 8.3 / - / - | 1.4 / - / - |
+| `wty_cpp` | 34.6 / 29.0 / 17.1 | -16.1% | -50.5% | - / - / - | - / - / - |
+| `sonic` | 60.7 / 49.2 / 34.0 | -19.0% | -44.0% | 14.0 / - / - | 1.7 / - / - |
+| `wbc_agile_velocity` | 77.6 / 67.1 / 44.1 | -13.5% | -43.1% | 13.7 / 25.0 / - | 2.4 / 3.6 / - |
+| `handoff`<br>`with_arms` | 69.9 / 64.3 / 37.7 | -8.0% | -46.1% | 9.8 / 14.4 / - | 1.8 / 2.2 / - |
+| `legged_rl_lab` | 3.9 / 3.3 / 2.9 | -16.5% | -25.3% | - / - / - | - / - / - |
+| `falcon` | 36.3 / 34.5 / 23.1 | -5.1% | -36.4% | - / - / - | - / - / - |
+| `asap` | 45.1 / 41.9 / 31.0 | -7.2% | -31.2% | - / - / - | - / - / - |
+| `run_residual` | 49.9 / 49.3 / 35.6 | -1.1% | -28.7% | - / - / - | - / - / - |
+| `robomimic` | 43.8 / 39.4 / 35.5 | -10.1% | -19.0% | - / - / - | - / - / - |
+| `handoff` | 22.1 / 22.3 / 15.7 | +1.1% | -28.7% | - / - / - | - / - / - |
+| `mturan33` | 3.5 / 3.2 / 3.1 | -9.2% | -13.6% | - / - / - | - / - / - |
+| `decoupled_wbc`<br>`h074_p000` | 81.5 / 78.3 / 68.7 | -3.9% | -15.7% | 9.1 / 11.3 / 20.6 | 2.0 / 2.4 / 3.9 |
+| `g1_gym` | 2.2 / 2.1 / 1.9 | -5.7% | -13.0% | - / - / - | - / - / - |
+| `decoupled_wbc`<br>`h070_p000` | 82.0 / 78.9 / 70.8 | -3.7% | -13.7% | 9.1 / 13.0 / 22.5 | 2.1 / 2.6 / 4.2 |
+| `gr00t_wbc`<br>`h070_p000` | 82.9 / 79.9 / 74.5 | -3.6% | -10.1% | 8.4 / 12.9 / 21.9 | 1.1 / 1.5 / 2.4 |
+| `decoupled_wbc`<br>`h066_p012` | 82.7 / 80.3 / 74.5 | -3.0% | -10.0% | 9.5 / 13.8 / 20.4 | 2.2 / 2.8 / 3.8 |
+| `homie` | 77.3 / 75.4 / 71.0 | -2.4% | -8.1% | 10.3 / 15.1 / 23.2 | 1.5 / 1.8 / 2.4 |
+| `rl_mjlab` | 5.4 / 5.5 / 4.9 | +0.2% | -10.2% | - / - / - | - / - / - |
+| `gr00t_wbc`<br>`h074_p000` | 80.3 / 79.3 / 74.0 | -1.3% | -7.9% | 8.8 / 12.9 / 22.0 | 1.1 / 1.5 / 2.4 |
+| `gr00t_wbc`<br>`h066_p012` | 83.9 / 83.6 / 76.5 | -0.3% | -8.8% | 8.4 / 12.4 / 21.1 | 1.0 / 1.4 / 2.2 |
+| `gr00t_wbc`<br>`h066_p000` | 83.5 / 82.9 / 76.6 | -0.7% | -8.2% | 8.4 / 12.2 / 20.7 | 1.0 / 1.4 / 2.2 |
+| `bfm_zero` | 11.2 / 11.7 / 9.9 | +4.4% | -11.4% | - / - / - | - / - / - |
+| `decoupled_wbc`<br>`h066_p000` | 82.5 / 81.4 / 77.8 | -1.3% | -5.6% | 9.4 / 11.8 / 19.5 | 2.2 / 2.5 / 3.7 |
+| `wcompton` | 2.4 / 2.4 / 2.2 | +1.4% | -8.1% | - / - / - | - / - / - |
+| `amo` | 77.2 / 78.6 / 79.5 | +1.8% | +3.0% | 11.0 / 13.8 / 17.7 | 1.4 / 1.6 / 1.9 |
+| `zealot` | 64.8 / 72.1 / 64.6 | +11.3% | -0.4% | 24.1 / 62.0 / 101.4 | 9.0 / 14.4 / 18.4 |
+| `mimic_lite` | 53.8 / 56.5 / 57.0 | +5.0% | +6.0% | - / - / 26.8 | - / - / 3.1 |
+| `holosoma` | 6.1 / 6.6 / 6.4 | +7.8% | +4.7% | - / - / - | - / - / - |
+| `clobot` | 1.8 / 1.9 / 1.9 | +5.8% | +7.0% | - / - / - | - / - / - |
+| `clobot`<br>`with_arms` | 39.9 / 43.3 / 42.6 | +8.4% | +6.7% | - / - / - | - / - / - |
+| `huru` | 7.9 / 9.7 / 9.9 | +23.3% | +25.7% | - / - / - | - / - / - |
+| `dm_agile` | 4.3 / 4.9 / 5.9 | +13.2% | +37.5% | - / - / - | - / - / - |
+| `nanog1` | 2.2 / 2.7 / 2.9 | +26.0% | +33.5% | - / - / - | - / - / - |
+| `josabb` | 10.1 / 13.0 / 13.9 | +29.0% | +38.1% | - / - / - | - / - / - |
+| `dm_march` | 5.2 / 7.4 / 6.6 | +42.5% | +27.3% | - / - / - | - / - / - |
+| `sunny` | 7.6 / 9.9 / 11.2 | +29.8% | +47.9% | - / - / - | - / - / - |
+| `stepdown` | 2.0 / 4.0 / 4.1 | +101.7% | +109.9% | - / - / - | - / - / - |
+
+Energy and vibrations are means over completed runs of both engines, `-`
+where fewer than a fifth of a row's runs complete.
+
+Stiffer legs cost the leaders up to four percent of their survival at x1.5 and
+six to sixteen percent at x2.0, while `openwbt`, `rl_gym` and `schoi` lose most
+of theirs already at x1.5. Only `amo`, `zealot`, `mimic_lite` and `clobot` with
+arms gain among the rows that last half a minute or more; the large gains at
+the bottom of the table are a few seconds on policies that fall within the
+first quarter-minute either way. Each network learned the dynamics of the gains
+it was trained with, so scaling them moves most policies outside what they
+know, and the legs also work harder for it: every row that completes enough
+runs spends more energy and vibrates more, `gr00t_wbc` h066_p012 going from 8.4
+to 12.4 to 21.1 kJ.
+
+TL;DR: increasing the default leg gains makes most policies less stable.
 
 ### Why two policies appear four times each
 

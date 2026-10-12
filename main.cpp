@@ -848,6 +848,7 @@ constexpr int RECORD_WIDTH = 160;
 constexpr int RECORD_HEIGHT = 90;
 
 constexpr int ARM_LEFT_FIRST = 15, ARM_RIGHT_FIRST = 22, ARM_DOF = 7;
+constexpr int LEG_JOINTS = 12;
 constexpr double ARM_STEP_RAD = 0.06;
 constexpr int ARM_DRAWS = 8;
 constexpr double ARM_TARGET_S = 0.5;
@@ -1629,6 +1630,7 @@ int run(
   std::string record_dir;
   bool plan_only = false;
   std::string trace;
+  double leg_gain = 1.0;
   std::string policy_name = "gr00t_wbc_h074_p000";
   PhysicsEngine engine = PhysicsEngine::kPhysx;
   std::string graph_path = "build/mjwarp/g1";
@@ -1639,6 +1641,8 @@ int run(
       runid0 = uint32_t(std::atoi(argv[++i]));
     else if (!std::strcmp(argv[i], "--csv") && i + 1 < argc)
       csv = argv[++i];
+    else if (!std::strcmp(argv[i], "--leg-gain") && i + 1 < argc)
+      leg_gain = std::atof(argv[++i]);
     else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc)
       walk_s = std::atof(argv[++i]);
     else if (!std::strcmp(argv[i], "--init") && i + 1 < argc)
@@ -1686,6 +1690,8 @@ int run(
           "  --runs N          fleet size, one robot per run id (default 256)\n"
           "  --runid N         first run id (default 0)\n"
           "  --runids A-B      the same, as a closed range\n"
+          "  --leg-gain S      scale the policy's leg kp and kd by S (default "
+          "1)\n"
           "  --seconds S       walking time per run (default %g)\n"
           "  --init S          settling time before the policy is engaged\n"
           "  --csv PATH        where to write the per-run rows\n"
@@ -1743,6 +1749,10 @@ int run(
       kp[i] = pol->kp()[i];
       kd[i] = pol->kd()[i];
     }
+  }
+  for (int i = 0; i < LEG_JOINTS; ++i) {
+    kp[i] *= float(leg_gain);
+    kd[i] *= float(leg_gain);
   }
 
   phys->set_gains(crane_kp, crane_kd);

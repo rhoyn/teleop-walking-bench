@@ -24,7 +24,7 @@ COLS=10 ROWS=9 TW=128 TH=72 OW=1280 OH=720 BG=0x3D9356
 FONT=assets/JetBrainsMono.ttf
 ENGINES=${ENGINES:-"physx mujoco"}
 
-POLICIES=${POLICIES:-$(build/table results/punches/*.csv | sed 's/`<br>`/_/' |
+POLICIES=${POLICIES:-$(build/table results/punches_gainx1.0/*.csv | sed 's/`<br>`/_/' |
   sed -n 's/^| ~*`\([a-z0-9_]*\)`.*/\1/p')}
 TOTAL=$(($(echo $POLICIES | wc -w) * $(echo $ENGINES | wc -w)))
 export TOTAL

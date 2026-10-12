@@ -4,6 +4,8 @@ cd "$(dirname "$0")"
 
 RUNS=${RUNS:-512}
 ROUNDS=${ROUNDS:-10}
+LEG_GAINS="1.0 1.5 2.0"
+GAIN_RUNS=${GAIN_RUNS:-1024}
 NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "  MIG " || true)
 [ "$NGPUS" -ge 1 ] || NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "^GPU " || true)
 [ "$NGPUS" -ge 1 ] || NGPUS=1
@@ -15,7 +17,7 @@ CORESEQ=$(mktemp -t benchmark-core.XXXXXX)
 echo 0 >"$CORESEQ"
 GPUDIR=$(mktemp -d -t benchmark-gpu.XXXXXX)
 GPUSLOTS=$(((JOBS + NGPUS - 1) / NGPUS))
-export RUNS CPUS NICE NCORES CORESEQ NGPUS GPUDIR GPUSLOTS
+export RUNS GAIN_RUNS CPUS NICE NCORES CORESEQ NGPUS GPUDIR GPUSLOTS
 
 POLICIES=$(for d in policies/*/; do [ -f "$d/policy.cpp" ] && basename "$d"; done |
   grep -vE '^(decoupled_wbc|gr00t_wbc)$')
@@ -43,10 +45,14 @@ RUN='
   ROUND=$1
   P=$2
   ENGINE=$3
+  G=$4
+  DIR=results/punches_gainx$G
   R=$(printf "r%02d" "$ROUND")
   n=$RUNS
+  [ "$G" = 1.0 ] || n=$GAIN_RUNS
   f=$((ROUND * n))
   out=$TIER.$R.$P.$ENGINE
+  log=$out.gainx$G
   CORE=$(
     exec 9>"$CORESEQ.lock"
     flock 9
@@ -67,17 +73,18 @@ RUN='
   done
   if CUDA_VISIBLE_DEVICES="$GPU" chrt --idle 0 nice -n "$NICE" taskset -c "$CORE" build/teleop-walking-benchmark \
       --engine "$ENGINE" --policy "$P" --runids "$f-$((f + n - 1))" \
-      --csv "results/punches/$out.csv" >"progress/$out.log" 2>&1; then
-    grep "^mujoco:" "progress/$out.log" | sed "s|^|$out |" >>benchmark.log
+      --leg-gain "$G" --csv "$DIR/$out.csv" >"progress/$log.log" 2>&1; then
+    grep "^mujoco:" "progress/$log.log" | sed "s|^|$log |" >>benchmark.log
   else
-    echo "FAILED $out" >&2
-    { echo "FAILED $out"; cat "progress/$out.log"; } >>benchmark.log
+    echo "FAILED $log" >&2
+    { echo "FAILED $log"; cat "progress/$log.log"; } >>benchmark.log
   fi
-  rm -f "progress/$out.log"'
+  rm -f "progress/$log.log"'
 
 chrt --idle 0 nice -n "$NICE" taskset -c "$CPUS" make
-make capture MJWARP_NWORLD="$RUNS"
-mkdir -p results/punches progress
+make capture MJWARP_NWORLD="$((RUNS > GAIN_RUNS ? RUNS : GAIN_RUNS))"
+mkdir -p progress
+for g in $LEG_GAINS; do mkdir -p "results/punches_gainx$g"; done
 rm -f progress/*.log benchmark.log
 
 CPUPREV=$(mktemp -t benchmark-cpu.XXXXXX)
@@ -107,12 +114,17 @@ trap 'kill $MON 2>/dev/null || true; rm -rf "$CORESEQ" "$CORESEQ.lock" "$GPUDIR"
 
 for r in $(seq 0 $((ROUNDS - 1))); do
   for p in $POLICIES; do
-    tier=tier_b
-    rounds=1
-    echo "$TIER_A" | grep -qxF "$p" && tier=tier_a && rounds=$ROUNDS
-    [ "$r" -lt "$rounds" ] || continue
-    for e in mujoco physx; do
-      echo "$tier $r $p $e"
+    for g in $LEG_GAINS; do
+      tier=tier_b
+      rounds=1
+      echo "$TIER_A" | grep -qxF "$p" && tier=tier_a
+      [ "$tier" = tier_a ] && [ "$g" = 1.0 ] && rounds=$ROUNDS
+      [ "$r" -lt "$rounds" ] || continue
+      dir=results/punches_gainx$g
+      for e in mujoco physx; do
+        [ -s "$dir/$tier.$(printf "r%02d" "$r").$p.$e.csv" ] && continue
+        echo "$tier $r $p $e $g"
+      done
     done
   done
-done | xargs -P "$JOBS" -n 4 bash -c "$RUN"
+done | xargs -P "$JOBS" -n 5 bash -c "$RUN"
