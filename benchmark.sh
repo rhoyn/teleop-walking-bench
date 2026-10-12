@@ -2,8 +2,32 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-RUNS=${RUNS:-512}
-ROUNDS=${ROUNDS:-10}
+usage() {
+  echo "usage: $0 [--benchmark tour|rotate|direction]" >&2
+  exit 2
+}
+MODE=tour
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --benchmark) [ $# -ge 2 ] || usage; MODE=$2; shift 2 ;;
+    --benchmark=*) MODE=${1#*=}; shift ;;
+    *) usage ;;
+  esac
+done
+case "$MODE" in
+  tour | rotate | direction) ;;
+  *) usage ;;
+esac
+
+if [ "$MODE" = tour ]; then
+  RUNS=${RUNS:-512}
+  ROUNDS=${ROUNDS:-10}
+  BASE=punches
+else
+  RUNS=${RUNS:-1024}
+  ROUNDS=${ROUNDS:-4}
+  BASE=$MODE
+fi
 LEG_GAINS="1.0 1.5 2.0"
 GAIN_RUNS=${GAIN_RUNS:-1024}
 NGPUS=$(nvidia-smi -L 2>/dev/null | grep -c "  MIG " || true)
@@ -17,8 +41,9 @@ CORESEQ=$(mktemp -t benchmark-core.XXXXXX)
 echo 0 >"$CORESEQ"
 GPUDIR=$(mktemp -d -t benchmark-gpu.XXXXXX)
 GPUSLOTS=$(((JOBS + NGPUS - 1) / NGPUS))
-export RUNS GAIN_RUNS CPUS NICE NCORES CORESEQ NGPUS GPUDIR GPUSLOTS
+export MODE BASE RUNS GAIN_RUNS CPUS NICE NCORES CORESEQ NGPUS GPUDIR GPUSLOTS
 
+ONLY=${POLICIES:-}
 POLICIES=$(for d in policies/*/; do [ -f "$d/policy.cpp" ] && basename "$d"; done |
   grep -vE '^(decoupled_wbc|gr00t_wbc)$')
 POLICIES="$POLICIES clobot_with_arms handoff_with_arms"
@@ -46,12 +71,13 @@ RUN='
   P=$2
   ENGINE=$3
   G=$4
-  DIR=results/punches_gainx$G
+  DIR=results/${BASE}_gainx$G
   R=$(printf "r%02d" "$ROUND")
   n=$RUNS
   [ "$G" = 1.0 ] || n=$GAIN_RUNS
   f=$((ROUND * n))
   out=$TIER.$R.$P.$ENGINE
+  [ "$MODE" = tour ] || out=$R.$P.$ENGINE
   log=$out.gainx$G
   CORE=$(
     exec 9>"$CORESEQ.lock"
@@ -72,7 +98,7 @@ RUN='
     [ -z "$GPU" ] && sleep 1
   done
   if CUDA_VISIBLE_DEVICES="$GPU" chrt --idle 0 nice -n "$NICE" taskset -c "$CORE" build/teleop-walking-benchmark \
-      --engine "$ENGINE" --policy "$P" --runids "$f-$((f + n - 1))" \
+      --mode "$MODE" --engine "$ENGINE" --policy "$P" --runids "$f-$((f + n - 1))" \
       --leg-gain "$G" --csv "$DIR/$out.csv" >"progress/$log.log" 2>&1; then
     grep "^mujoco:" "progress/$log.log" | sed "s|^|$log |" >>benchmark.log
   else
@@ -84,7 +110,7 @@ RUN='
 chrt --idle 0 nice -n "$NICE" taskset -c "$CPUS" make
 make capture MJWARP_NWORLD="$((RUNS > GAIN_RUNS ? RUNS : GAIN_RUNS))"
 mkdir -p progress
-for g in $LEG_GAINS; do mkdir -p "results/punches_gainx$g"; done
+for g in $LEG_GAINS; do mkdir -p "results/${BASE}_gainx$g"; done
 rm -f progress/*.log benchmark.log
 
 CPUPREV=$(mktemp -t benchmark-cpu.XXXXXX)
@@ -113,16 +139,19 @@ MON=$!
 trap 'kill $MON 2>/dev/null || true; rm -rf "$CORESEQ" "$CORESEQ.lock" "$GPUDIR" "$CPUPREV" "$CPUPREV.new"' EXIT
 
 for r in $(seq 0 $((ROUNDS - 1))); do
-  for p in $POLICIES; do
+  for p in ${ONLY:-$POLICIES}; do
     for g in $LEG_GAINS; do
       tier=tier_b
       rounds=1
-      echo "$TIER_A" | grep -qxF "$p" && tier=tier_a
+      [ "$MODE" = tour ] && echo "$TIER_A" | grep -qxF "$p" && tier=tier_a
       [ "$tier" = tier_a ] && [ "$g" = 1.0 ] && rounds=$ROUNDS
+      [ "$MODE" = tour ] || rounds=$ROUNDS
       [ "$r" -lt "$rounds" ] || continue
-      dir=results/punches_gainx$g
+      dir=results/${BASE}_gainx$g
+      name=$tier.$(printf "r%02d" "$r").$p
+      [ "$MODE" = tour ] || name=$(printf "r%02d" "$r").$p
       for e in mujoco physx; do
-        [ -s "$dir/$tier.$(printf "r%02d" "$r").$p.$e.csv" ] && continue
+        [ -s "$dir/$name.$e.csv" ] && continue
         echo "$tier $r $p $e $g"
       done
     done

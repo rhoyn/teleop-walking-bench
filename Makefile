@@ -79,6 +79,11 @@ physx-sdk:
 	grep -qF '{0, $(PHYSX_SPIN_NS)}; ::nanosleep' \
 		$(PHYSX)/source/gpucommon/include/PxgCudaUtils.h \
 		|| { echo "physx-sdk: spin-wait patch did not apply to $(PHYSX_REF)" >&2; exit 1; }
+	grep -qF 'cuCtxCreate(&mCtx, NULL,' $(PHYSX)/source/cudamanager/src/CudaContextManager.cpp \
+		|| sed -i 's|^\(\t*\)status = cuCtxCreate(&mCtx, (unsigned int)flags, mDevHandle);$$|#if CUDA_VERSION >= 13000\n\1status = cuCtxCreate(\&mCtx, NULL, (unsigned int)flags, mDevHandle);\n#else\n\1status = cuCtxCreate(\&mCtx, (unsigned int)flags, mDevHandle);\n#endif|' \
+		$(PHYSX)/source/cudamanager/src/CudaContextManager.cpp
+	grep -qF 'cuCtxCreate(&mCtx, NULL,' $(PHYSX)/source/cudamanager/src/CudaContextManager.cpp \
+		|| { echo "physx-sdk: cuCtxCreate patch did not apply to $(PHYSX_REF)" >&2; exit 1; }
 	sed -e 's/name="linux-gcc"/name="$(PHYSX_PRESET)"/' \
 	    -e 's/\(PX_BUILDSNIPPETS" value="\)True/\1False/' \
 	    -e 's/\(PX_BUILDPVDRUNTIME" value="\)True/\1False/' \

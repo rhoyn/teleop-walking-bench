@@ -49,6 +49,7 @@ constexpr uint32_t STREAM_GUARD = 1;
 constexpr uint32_t STREAM_TOUR = 2;
 constexpr uint32_t STREAM_PUNCH = 3;
 constexpr uint32_t STREAM_ARM = 4;
+constexpr uint32_t STREAM_COMMAND = 5;
 
 std::mt19937 random_for(
     uint32_t id,
@@ -806,6 +807,7 @@ constexpr double CENTRE_Y_M = 0.0;
 constexpr double RADIUS_M = 0.75;
 constexpr double INIT_DURATION_S = 3.0;
 constexpr double FALL_PELVIS_Z = 0.20;
+constexpr double ROBOT_SPACING_M = 20.0;
 constexpr double PERIOD_S = 0.02;
 constexpr double PROGRESS_S = 0.1;
 
@@ -833,6 +835,12 @@ constexpr double RAMP_FLOOR = 1.0 / 3.0;
 constexpr double RAMP_S = 60.0;
 constexpr double PUNCH_DELAY_S = 0.1;
 constexpr double PUNCH_DURATION_S = 0.08;
+
+enum class Mode { kTour, kRotate, kDirection };
+constexpr double MODE_S = 10.0;
+constexpr double MODE_SETTLE_S = 2.0;
+constexpr double MODE_YAW_RATE_MAX = 1.0;
+constexpr double MODE_SPEED_MAX = 1.0;
 
 constexpr double PUNCH_HOLD_S = 0.5;
 constexpr double PUNCH_ARROW_SCALE = 2.0;
@@ -912,7 +920,61 @@ struct Run {
   double pelvis_speed = 0.0, head_speed = 0.0;
   double last_dist = 0.0, last_yaw_err = 0.0;
   bool have_last = false;
+
+  double want[3] = {};
+  bool measuring = false;
+  double m_t0 = 0.0, m_t = 0.0;
+  double m_x = 0.0, m_y = 0.0, m_yaw = 0.0, m_yaw0 = 0.0;
+  double m_fwd = 0.0, m_side = 0.0;
 };
+
+const char* mode_name(Mode mode) {
+  if (mode == Mode::kRotate) return "rotate";
+  if (mode == Mode::kDirection) return "direction";
+  return "tour";
+}
+
+void mode_command_make(
+    Run& r,
+    Mode mode
+) {
+  std::mt19937 rng = random_for(r.run_id, STREAM_COMMAND);
+  if (mode == Mode::kRotate) {
+    r.want[2] = random_between(rng, -MODE_YAW_RATE_MAX, MODE_YAW_RATE_MAX);
+  } else if (mode == Mode::kDirection) {
+    const double speed = random_between(rng, 0.0, MODE_SPEED_MAX);
+    const double dir = random_between(rng, 0.0, 2.0 * M_PI);
+    r.want[0] = speed * std::cos(dir);
+    r.want[1] = speed * std::sin(dir);
+  }
+}
+
+void mode_measure(
+    Run& r,
+    double t,
+    double x,
+    double y,
+    double heading
+) {
+  if (t < MODE_SETTLE_S) return;
+  if (!r.measuring) {
+    r.measuring = true;
+    r.m_t0 = r.m_t = t;
+    r.m_x = x;
+    r.m_y = y;
+    r.m_yaw = r.m_yaw0 = heading;
+    return;
+  }
+  const double yaw = r.m_yaw + std::remainder(heading - r.m_yaw, 2.0 * M_PI);
+  const double mid = 0.5 * (r.m_yaw + yaw);
+  const double dx = x - r.m_x, dy = y - r.m_y;
+  r.m_fwd += std::cos(mid) * dx + std::sin(mid) * dy;
+  r.m_side += -std::sin(mid) * dx + std::cos(mid) * dy;
+  r.m_t = t;
+  r.m_x = x;
+  r.m_y = y;
+  r.m_yaw = yaw;
+}
 
 std::vector<Waypoint> tour_make(uint32_t run_id) {
   std::vector<Waypoint> tour;
@@ -1630,6 +1692,8 @@ int run(
   std::string record_dir;
   bool plan_only = false;
   std::string trace;
+  Mode mode = Mode::kTour;
+  bool seconds_given = false;
   double leg_gain = 1.0;
   std::string policy_name = "gr00t_wbc_h074_p000";
   PhysicsEngine engine = PhysicsEngine::kPhysx;
@@ -1641,11 +1705,24 @@ int run(
       runid0 = uint32_t(std::atoi(argv[++i]));
     else if (!std::strcmp(argv[i], "--csv") && i + 1 < argc)
       csv = argv[++i];
-    else if (!std::strcmp(argv[i], "--leg-gain") && i + 1 < argc)
-      leg_gain = std::atof(argv[++i]);
-    else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc)
+    else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc) {
       walk_s = std::atof(argv[++i]);
-    else if (!std::strcmp(argv[i], "--init") && i + 1 < argc)
+      seconds_given = true;
+    } else if (!std::strcmp(argv[i], "--leg-gain") && i + 1 < argc) {
+      leg_gain = std::atof(argv[++i]);
+    } else if (!std::strcmp(argv[i], "--mode") && i + 1 < argc) {
+      const std::string want = argv[++i];
+      if (want == "tour") {
+        mode = Mode::kTour;
+      } else if (want == "rotate") {
+        mode = Mode::kRotate;
+      } else if (want == "direction") {
+        mode = Mode::kDirection;
+      } else {
+        std::fprintf(stderr, "unknown --mode '%s'\n", want.c_str());
+        return 2;
+      }
+    } else if (!std::strcmp(argv[i], "--init") && i + 1 < argc)
       init_s = std::atof(argv[++i]);
     else if (!std::strcmp(argv[i], "--graph") && i + 1 < argc)
       graph_path = argv[++i];
@@ -1690,9 +1767,19 @@ int run(
           "  --runs N          fleet size, one robot per run id (default 256)\n"
           "  --runid N         first run id (default 0)\n"
           "  --runids A-B      the same, as a closed range\n"
+          "  --mode NAME       tour, rotate or direction (default tour)\n"
+          "                    rotate: yaw rate uniform in -%g..%g rad/s per "
+          "run\n"
+          "                    direction: speed uniform in 0..%g m/s, heading "
+          "uniform\n"
+          "                    in 0..360 deg per run; both write commanded and "
+          "measured\n"
+          "                    vx, vy, yaw rate from t = %g s to the end or "
+          "the fall\n"
           "  --leg-gain S      scale the policy's leg kp and kd by S (default "
           "1)\n"
-          "  --seconds S       walking time per run (default %g)\n"
+          "  --seconds S       walking time per run (default %g, %g in rotate "
+          "and direction)\n"
           "  --init S          settling time before the policy is engaged\n"
           "  --csv PATH        where to write the per-run rows\n"
           "  --realtime R      pace the run at R times the wall clock\n"
@@ -1702,11 +1789,18 @@ int run(
           "exit\n"
           "  --trace PATH      robot and target pose every 25 ms\n"
           "  --help            this\n",
-          WALK_S
+          MODE_YAW_RATE_MAX,
+          MODE_YAW_RATE_MAX,
+          MODE_SPEED_MAX,
+          MODE_SETTLE_S,
+          WALK_S,
+          MODE_S
       );
       return 0;
     }
   }
+
+  if (mode != Mode::kTour && !seconds_given) walk_s = MODE_S;
 
   if (preview_on || !record_dir.empty()) {
     if (envs != 1)
@@ -1719,7 +1813,7 @@ int run(
   std::unique_ptr<Physics> phys;
   switch (engine) {
     case PhysicsEngine::kPhysx:
-      phys = physics_make_physx(model, envs, 4.0);
+      phys = physics_make_physx(model, envs, ROBOT_SPACING_M);
       break;
     case PhysicsEngine::kMujoco:
       phys = physics_make_mjwarp(graph_path, envs);
@@ -1788,8 +1882,9 @@ int run(
     r.tour = tour_make(r.run_id);
     r.arm_rng = random_for(r.run_id, STREAM_ARM);
 
-    if (getenv("NOPUNCH") == nullptr)
+    if (mode == Mode::kTour && getenv("NOPUNCH") == nullptr)
       r.punches = schedule_make(r.run_id, PUNCH_DELAY_S, POINT_S, WAYPOINTS);
+    mode_command_make(r, mode);
     for (int i = 0; i < ARM_DOF; ++i) {
       r.arm_left[i] = STANCE[ARM_LEFT_FIRST + i];
       r.arm_from[i] = r.arm_left[i];
@@ -2005,106 +2100,112 @@ int run(
             r.ay = wy;
             r.ayaw = wyaw;
           }
-          const int index = int(elapsed / POINT_S);
-          if (index != r.current_target) {
-            if (r.current_target >= 0 && r.have_last) {
-              r.pos_err_sum += r.last_dist * 100.0;
-              r.yaw_err_sum += std::fabs(r.last_yaw_err) * 180.0 / M_PI;
-              ++r.scored;
-              close_segment(r, e, r.current_target, cost_e, cost_v, cost_i);
-            } else if (r.current_target < 0) {
-              close_segment(r, e, -1, cost_e, cost_v, cost_i);
+          if (mode != Mode::kTour) {
+            for (int k = 0; k < 4; ++k) h_task[size_t(e) * 4 + k] = 0.0f;
+            for (int k = 0; k < 3; ++k) cmd[k] = r.want[k];
+            mode_measure(r, elapsed, wx, wy, wyaw);
+          } else {
+            const int index = int(elapsed / POINT_S);
+            if (index != r.current_target) {
+              if (r.current_target >= 0 && r.have_last) {
+                r.pos_err_sum += r.last_dist * 100.0;
+                r.yaw_err_sum += std::fabs(r.last_yaw_err) * 180.0 / M_PI;
+                ++r.scored;
+                close_segment(r, e, r.current_target, cost_e, cost_v, cost_i);
+              } else if (r.current_target < 0) {
+                close_segment(r, e, -1, cost_e, cost_v, cost_i);
+              }
+              r.current_target = index;
+              r.pos_reached = false;
+              r.yaw_reached = false;
             }
-            r.current_target = index;
-            r.pos_reached = false;
-            r.yaw_reached = false;
-          }
-          for (int k = 0; k < 4; ++k) h_task[size_t(e) * 4 + k] = 0.0f;
-          if (index >= 0 && index < int(r.tour.size())) {
-            const Waypoint& t = r.tour[size_t(index)];
-            const double tx =
-                r.ax + t.x * std::cos(r.ayaw) - t.y * std::sin(r.ayaw);
-            const double ty =
-                r.ay + t.x * std::sin(r.ayaw) + t.y * std::cos(r.ayaw);
-            const double tyaw = r.ayaw + t.yaw;
-            if (e == 0) {
-              view_tx = tx;
-              view_ty = ty;
-              view_tyaw = tyaw;
-              view_has = true;
-            }
-            const double dx = tx - wx, dy = ty - wy;
-            const double dist = std::hypot(dx, dy);
-            const double yaw_err = std::remainder(tyaw - wyaw, 2.0 * M_PI);
-            r.last_dist = dist;
-            r.last_yaw_err = yaw_err;
-            r.have_last = true;
+            for (int k = 0; k < 4; ++k) h_task[size_t(e) * 4 + k] = 0.0f;
+            if (index >= 0 && index < int(r.tour.size())) {
+              const Waypoint& t = r.tour[size_t(index)];
+              const double tx =
+                  r.ax + t.x * std::cos(r.ayaw) - t.y * std::sin(r.ayaw);
+              const double ty =
+                  r.ay + t.x * std::sin(r.ayaw) + t.y * std::cos(r.ayaw);
+              const double tyaw = r.ayaw + t.yaw;
+              if (e == 0) {
+                view_tx = tx;
+                view_ty = ty;
+                view_tyaw = tyaw;
+                view_has = true;
+              }
+              const double dx = tx - wx, dy = ty - wy;
+              const double dist = std::hypot(dx, dy);
+              const double yaw_err = std::remainder(tyaw - wyaw, 2.0 * M_PI);
+              r.last_dist = dist;
+              r.last_yaw_err = yaw_err;
+              r.have_last = true;
 
-            h_task[size_t(e) * 4 + 0] = float(dist);
-            h_task[size_t(e) * 4 + 1] = float(yaw_err);
+              h_task[size_t(e) * 4 + 0] = float(dist);
+              h_task[size_t(e) * 4 + 1] = float(yaw_err);
 
-            if (r.pos_reached) {
-              if (dist > LIM.pos_reached_exit_m) r.pos_reached = false;
-            } else {
-              if (dist < LIM.pos_reached_enter_m) r.pos_reached = true;
-            }
-            if (r.yaw_reached) {
-              if (std::fabs(yaw_err) > LIM.yaw_reached_exit_rad)
-                r.yaw_reached = false;
-            } else {
-              if (std::fabs(yaw_err) < LIM.yaw_reached_enter_rad)
-                r.yaw_reached = true;
-            }
+              if (r.pos_reached) {
+                if (dist > LIM.pos_reached_exit_m) r.pos_reached = false;
+              } else {
+                if (dist < LIM.pos_reached_enter_m) r.pos_reached = true;
+              }
+              if (r.yaw_reached) {
+                if (std::fabs(yaw_err) > LIM.yaw_reached_exit_rad)
+                  r.yaw_reached = false;
+              } else {
+                if (std::fabs(yaw_err) < LIM.yaw_reached_enter_rad)
+                  r.yaw_reached = true;
+              }
 
-            const double cy = std::cos(wyaw), sy = std::sin(wyaw);
-            h_task[size_t(e) * 4 + 2] = float(cy * dx + sy * dy);
-            h_task[size_t(e) * 4 + 3] = float(-sy * dx + cy * dy);
-            if (!r.pos_reached) {
-              cmd[0] = LIM.walk_kp_pos * (cy * dx + sy * dy);
-              cmd[1] = LIM.walk_kp_pos * (-sy * dx + cy * dy);
-            }
-            if (!r.yaw_reached) cmd[2] = LIM.walk_kp_yaw * yaw_err;
+              const double cy = std::cos(wyaw), sy = std::sin(wyaw);
+              h_task[size_t(e) * 4 + 2] = float(cy * dx + sy * dy);
+              h_task[size_t(e) * 4 + 3] = float(-sy * dx + cy * dy);
+              if (!r.pos_reached) {
+                cmd[0] = LIM.walk_kp_pos * (cy * dx + sy * dy);
+                cmd[1] = LIM.walk_kp_pos * (-sy * dx + cy * dy);
+              }
+              if (!r.yaw_reached) cmd[2] = LIM.walk_kp_yaw * yaw_err;
 
-            const double norm = std::hypot(cmd[0], cmd[1]);
-            if (LIM.speed_norm > 0.0 && norm > LIM.speed_norm) {
-              cmd[0] *= LIM.speed_norm / norm;
-              cmd[1] *= LIM.speed_norm / norm;
-            }
-            cmd[0] = std::clamp(cmd[0], LIM.vx_min, LIM.vx_max);
-            cmd[1] = std::clamp(cmd[1], -LIM.vy_abs, LIM.vy_abs);
-            cmd[2] = std::clamp(cmd[2], -LIM.yaw_rate_abs, LIM.yaw_rate_abs);
-            if (trace_out.is_open() &&
-                std::floor(elapsed / 0.025) !=
-                    std::floor((elapsed - PERIOD_S) / 0.025)) {
-              trace_out << r.run_id << ',' << elapsed << ',' << wx << ',' << wy
-                        << ',' << wyaw << ',' << tx << ',' << ty << ',' << tyaw
-                        << ',' << dist << ',' << yaw_err << ',' << cmd[0] << ','
-                        << cmd[1] << ',' << cmd[2] << ',' << index << ','
-                        << r.pos_reached << ',' << r.yaw_reached << ',' << p[6]
-                        << ','
-                        << std::asin(
-                               std::clamp(
-                                   2.0 * (p[3] * p[1] - p[2] * p[0]),
-                                   -1.0,
-                                   1.0
-                               )
-                           )
-                        << ',' << phys->foot_height()[size_t(e) * 2] << ','
-                        << phys->foot_height()[size_t(e) * 2 + 1] << ','
-                        << h_mq[size_t(e) * NUM_MOTOR + 3] << ','
-                        << h_mq[size_t(e) * NUM_MOTOR + 9] << ','
-                        << h_mq[size_t(e) * NUM_MOTOR + 4] << ','
-                        << h_mq[size_t(e) * NUM_MOTOR + 10] << ','
-                        << h_mq[size_t(e) * NUM_MOTOR + 0] << ','
-                        << h_mq[size_t(e) * NUM_MOTOR + 6] << ','
-                        << phys->body_speed()[size_t(e) * 2] << ','
-                        << h_tq[size_t(e) * NUM_MOTOR + 0] << ','
-                        << h_tq[size_t(e) * NUM_MOTOR + 3] << ','
-                        << h_tq[size_t(e) * NUM_MOTOR + 4] << ','
-                        << h_dq[size_t(e) * NUM_MOTOR + 0] << ','
-                        << h_dq[size_t(e) * NUM_MOTOR + 3] << ','
-                        << h_dq[size_t(e) * NUM_MOTOR + 4] << ','
-                        << h_gy[size_t(e) * 3 + 1] << '\n';
+              const double norm = std::hypot(cmd[0], cmd[1]);
+              if (LIM.speed_norm > 0.0 && norm > LIM.speed_norm) {
+                cmd[0] *= LIM.speed_norm / norm;
+                cmd[1] *= LIM.speed_norm / norm;
+              }
+              cmd[0] = std::clamp(cmd[0], LIM.vx_min, LIM.vx_max);
+              cmd[1] = std::clamp(cmd[1], -LIM.vy_abs, LIM.vy_abs);
+              cmd[2] = std::clamp(cmd[2], -LIM.yaw_rate_abs, LIM.yaw_rate_abs);
+              if (trace_out.is_open() &&
+                  std::floor(elapsed / 0.025) !=
+                      std::floor((elapsed - PERIOD_S) / 0.025)) {
+                trace_out << r.run_id << ',' << elapsed << ',' << wx << ','
+                          << wy << ',' << wyaw << ',' << tx << ',' << ty << ','
+                          << tyaw << ',' << dist << ',' << yaw_err << ','
+                          << cmd[0] << ',' << cmd[1] << ',' << cmd[2] << ','
+                          << index << ',' << r.pos_reached << ','
+                          << r.yaw_reached << ',' << p[6] << ','
+                          << std::asin(
+                                 std::clamp(
+                                     2.0 * (p[3] * p[1] - p[2] * p[0]),
+                                     -1.0,
+                                     1.0
+                                 )
+                             )
+                          << ',' << phys->foot_height()[size_t(e) * 2] << ','
+                          << phys->foot_height()[size_t(e) * 2 + 1] << ','
+                          << h_mq[size_t(e) * NUM_MOTOR + 3] << ','
+                          << h_mq[size_t(e) * NUM_MOTOR + 9] << ','
+                          << h_mq[size_t(e) * NUM_MOTOR + 4] << ','
+                          << h_mq[size_t(e) * NUM_MOTOR + 10] << ','
+                          << h_mq[size_t(e) * NUM_MOTOR + 0] << ','
+                          << h_mq[size_t(e) * NUM_MOTOR + 6] << ','
+                          << phys->body_speed()[size_t(e) * 2] << ','
+                          << h_tq[size_t(e) * NUM_MOTOR + 0] << ','
+                          << h_tq[size_t(e) * NUM_MOTOR + 3] << ','
+                          << h_tq[size_t(e) * NUM_MOTOR + 4] << ','
+                          << h_dq[size_t(e) * NUM_MOTOR + 0] << ','
+                          << h_dq[size_t(e) * NUM_MOTOR + 3] << ','
+                          << h_dq[size_t(e) * NUM_MOTOR + 4] << ','
+                          << h_gy[size_t(e) * 3 + 1] << '\n';
+              }
             }
           }
         }
@@ -2269,6 +2370,43 @@ int run(
     }
     close_segment(r, e, r.current_target, final_e, final_v, final_i);
     r.alive = h_alive[size_t(e)] != 0;
+  }
+
+  if (mode != Mode::kTour) {
+    std::filesystem::create_directories(
+        std::filesystem::path(csv).parent_path()
+    );
+    std::ofstream out(csv);
+    out << "policy,runid,outcome,survival_s,cmd_vx_mps,cmd_vy_mps,cmd_wz_rads"
+        << ",measured_s,vx_mps,vy_mps,wz_rads\n";
+    int complete = 0;
+    for (const Run& r : runs) {
+      const bool done = r.alive;
+      if (done) ++complete;
+      const double surv = done ? walk_s : std::max(0.0, r.fell_at - init_s);
+      out << policy_name << ',' << r.run_id << ','
+          << (done ? "complete" : "fell") << ',' << surv << ',' << r.want[0]
+          << ',' << r.want[1] << ',' << r.want[2];
+      const double span = r.m_t - r.m_t0;
+      out << ',' << std::max(0.0, span);
+      if (span > 0.0) {
+        out << ',' << r.m_fwd / span << ',' << r.m_side / span << ','
+            << (r.m_yaw - r.m_yaw0) / span;
+      } else {
+        out << ",,,";
+      }
+      out << '\n';
+    }
+    std::printf(
+        "\n%s: %d runs, %d complete (%.0f%%), wrote %s\n",
+        mode_name(mode),
+        envs,
+        complete,
+        100.0 * complete / envs,
+        csv.c_str()
+    );
+    recorder_close(std::move(recorder));
+    return 0;
   }
 
   std::filesystem::create_directories(std::filesystem::path(csv).parent_path());
