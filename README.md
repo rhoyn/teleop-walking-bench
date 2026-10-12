@@ -270,6 +270,17 @@ Each run holds one command for 10 s, with no punches: a yaw rate in `--mode rota
 MuJoCo and PhysX differ in yaw-rate tracking by 0.049 on average (area between the engines' median curves at x1.0), from `amo` closest to `decoupled_wbc_h066_p000` furthest; per policy in [results/cmd_vs_real_movements/README.md](results/cmd_vs_real_movements/README.md).
 <!-- cmd_vs_real_movements:end -->
 
+Run id 0 of each benchmark on every policy above, in rank order, PhysX and
+MuJoCo side by side (`./preview.sh --benchmark rotate|direction`).
+
+Rotate, turning right at 0.1 rad/s:
+
+https://github.com/user-attachments/assets/1ea27fb6-a9cf-4c89-8791-99e545b0c1fc
+
+Direction, walking straight ahead at 0.1 m/s:
+
+https://github.com/user-attachments/assets/938add24-a596-461c-bdfb-2fbac219c5be
+
 ## MuJoCo vs Isaac Sim engine: PhysX
 
 Each row is one policy run twice — the same exported weights, the same
