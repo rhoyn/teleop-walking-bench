@@ -24,6 +24,10 @@ constexpr float TORSO_YAW = 0.0f;
 constexpr float TORSO_PITCH = 0.0f;
 constexpr float TORSO_ROLL = 0.0f;
 constexpr float STAND_SPEED = 0.1f;
+constexpr float TURN_YAW_RAD = 0.1f;
+constexpr float YAW_CMD_MIN = 0.05f;
+constexpr float YAW_LEAD_S = 0.25f;
+constexpr float YAW_LEAD_MAX_RAD = 1.0f;
 constexpr float MAX_VX = 0.5f;
 constexpr float MAX_VY = 0.4f;
 
@@ -124,7 +128,12 @@ __global__ void k_amo_obs(
   const float dist = task[env * 4 + 0];
   const float yaw_err = task[env * 4 + 1];
   const bool has_target = dist > 0.0f;
-  const float dyaw = (in_place[env] != 0 || !has_target) ? 0.0f : -yaw_err;
+  const bool yaw_cmd = fabsf(c[2]) >= YAW_CMD_MIN;
+  const float lead =
+      fminf(fmaxf(c[2] * YAW_LEAD_S, -YAW_LEAD_MAX_RAD), YAW_LEAD_MAX_RAD);
+  const float dyaw = yaw_cmd                               ? -lead
+                     : (in_place[env] != 0 || !has_target) ? 0.0f
+                                                           : -yaw_err;
 
   int k = 0;
   for (int i = 0; i < 3; ++i) o[k++] = gyro[env * 3 + i] * ANG_VEL_SCALE;
@@ -188,6 +197,7 @@ __global__ void k_amo_act(
     const float* __restrict__ raw,
     const float* __restrict__ motor_q,
     const float* __restrict__ cmd,
+    const float* __restrict__ task,
     const float* __restrict__ arm_pose,
     float* __restrict__ last_action,
     float* __restrict__ gait,
@@ -216,7 +226,10 @@ __global__ void k_amo_act(
   }
 
   const float* c = cmd + env * 3;
-  const bool stand = sqrtf(c[0] * c[0] + c[1] * c[1]) < STAND_SPEED;
+  const bool turning =
+      task[env * 4 + 0] > 0.0f && fabsf(task[env * 4 + 1]) >= TURN_YAW_RAD;
+  const bool stand = sqrtf(c[0] * c[0] + c[1] * c[1]) < STAND_SPEED &&
+                     !turning && fabsf(c[2]) < YAW_CMD_MIN;
   in_place[env] = stand ? 1 : 0;
 
   float g0 = fmodf(gait[env * 2 + 0] + CONTROL_DT * GAIT_FREQ, 1.0f);
@@ -334,6 +347,7 @@ struct Policy : policy_api::Policy {
         d_act,
         c.motor_q,
         c.cmd,
+        c.task,
         c.arm_pose,
         d_last,
         d_gait,
