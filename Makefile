@@ -13,7 +13,7 @@ TRT    ?= $(HOME)/TensorRT
 
 POLICIES := $(wildcard policies/*/*.cpp)
 
-.PHONY: all clean info table physx-sdk matplot cmd_vs_real_movements
+.PHONY: all clean info table physx-sdk stb cmd_vs_real_movements
 .DEFAULT_GOAL := all
 
 all: $(BIN)
@@ -122,31 +122,22 @@ $(TABLE): table.cpp | $(BUILD)
 	@echo "CXX $<"
 	@$(CXX) -std=c++20 -O2 -DNDEBUG -Wall -Wextra $< -o $@
 
-MATPLOT_SRC ?= $(BUILD)/matplotplusplus
-MATPLOT_REPO ?= https://github.com/alandefreitas/matplotplusplus.git
-MATPLOT_REF ?= v1.2.2
-MATPLOT_LIB := $(MATPLOT_SRC)/build/source/matplot/libmatplot.a
-MATPLOT_INC := -I$(MATPLOT_SRC)/source -I$(MATPLOT_SRC)/build/source/matplot
+STB_DIR ?= $(BUILD)/stb
+STB_REF ?= 2c980bb59875b0d32144a71867fbdebb2f77cd20
+STB := $(STB_DIR)/stb_truetype.h $(STB_DIR)/stb_image_write.h
 CMD_VS_REAL := $(BUILD)/cmd_vs_real_movements
 
-matplot: $(MATPLOT_LIB)
+stb: $(STB)
 
-$(MATPLOT_LIB): | $(BUILD)
-	test -d $(MATPLOT_SRC) || git clone --quiet $(MATPLOT_REPO) $(MATPLOT_SRC)
-	git -C $(MATPLOT_SRC) checkout --quiet $(MATPLOT_REF)
-	cmake -S $(MATPLOT_SRC) -B $(MATPLOT_SRC)/build -DCMAKE_BUILD_TYPE=Release \
-		-DMATPLOTPP_BUILD_EXAMPLES=OFF -DMATPLOTPP_BUILD_TESTS=OFF \
-		-DMATPLOTPP_BUILD_INSTALLER=OFF -DMATPLOTPP_BUILD_PACKAGE=OFF \
-		-DMATPLOTPP_BUILD_WITH_SANITIZERS=OFF -DBUILD_SHARED_LIBS=OFF >/dev/null
-	cmake --build $(MATPLOT_SRC)/build --target matplot -j >/dev/null
-	command -v gnuplot >/dev/null || { echo "cmd_vs_real_movements: matplot++ draws through gnuplot, install gnuplot-nox" >&2; exit 1; }
+$(STB_DIR)/%.h: | $(BUILD)
+	@mkdir -p $(STB_DIR)
+	curl -fsSL https://raw.githubusercontent.com/nothings/stb/$(STB_REF)/$*.h -o $@
 
 cmd_vs_real_movements: $(CMD_VS_REAL)
 
-$(CMD_VS_REAL): cmd_vs_real_movements.cpp $(MATPLOT_LIB) | $(BUILD)
+$(CMD_VS_REAL): cmd_vs_real_movements.cpp $(STB) | $(BUILD)
 	@echo "CXX $<"
-	@$(CXX) -std=c++20 -O2 -DNDEBUG -Wall -Wextra $(MATPLOT_INC) $< -o $@ \
-		$(MATPLOT_LIB) $(MATPLOT_SRC)/build/source/3rd_party/libnodesoup.a -lpng -lz -lpthread
+	@$(CXX) -std=c++20 -O2 -DNDEBUG -Wall -Wextra -isystem $(STB_DIR) $< -o $@
 
 
 info:

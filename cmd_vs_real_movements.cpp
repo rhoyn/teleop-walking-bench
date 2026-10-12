@@ -1,9 +1,14 @@
-#include <matplot/matplot.h>
+#define STB_TRUETYPE_IMPLEMENTATION
+#include <stb_truetype.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -12,11 +17,335 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
-namespace mp = matplot;
+
+namespace canvas {
+
+constexpr int TILE = 800;
+constexpr int PX_PER_SCALE = 9;
+constexpr int TITLE_SCALE = 4;
+constexpr int LABEL_SCALE = 2;
+constexpr int HEADER_H = 80;
+constexpr int STRIP_H = 20;
+
+struct RGB {
+  unsigned char r, g, b;
+};
+
+constexpr RGB BG = {46, 111, 64};
+constexpr RGB WHITE = {255, 255, 255};
+constexpr RGB BLACK = {0, 0, 0};
+
+struct Image {
+  int w = TILE, h = TILE;
+  std::vector<unsigned char> px;
+  int clip_x0 = 0, clip_y0 = 0, clip_x1 = TILE, clip_y1 = TILE;
+};
+
+struct Clip {
+  Image& im;
+  int x0, y0, x1, y1;
+  Clip(
+      Image& i,
+      int cx0,
+      int cy0,
+      int cx1,
+      int cy1
+  )
+      : im(i),
+        x0(i.clip_x0),
+        y0(i.clip_y0),
+        x1(i.clip_x1),
+        y1(i.clip_y1) {
+    im.clip_x0 = cx0;
+    im.clip_y0 = cy0;
+    im.clip_x1 = cx1;
+    im.clip_y1 = cy1;
+  }
+  ~Clip() {
+    im.clip_x0 = x0;
+    im.clip_y0 = y0;
+    im.clip_x1 = x1;
+    im.clip_y1 = y1;
+  }
+};
+
+struct Axes {
+  int px = 0, py = 0, pw = 1, ph = 1;
+  double x0 = 0, x1 = 1, y0 = 0, y1 = 1;
+};
+
+struct Font {
+  std::vector<unsigned char> data;
+  stbtt_fontinfo info;
+  bool ok = false;
+};
+
+Font& font() {
+  static Font f;
+  static bool tried = false;
+  if (tried) return f;
+  tried = true;
+  std::ifstream in("assets/JetBrainsMono.ttf", std::ios::binary);
+  f.data.assign(
+      std::istreambuf_iterator<char>(in),
+      std::istreambuf_iterator<char>()
+  );
+  f.ok = !f.data.empty() && stbtt_InitFont(
+                                &f.info,
+                                f.data.data(),
+                                stbtt_GetFontOffsetForIndex(f.data.data(), 0)
+                            );
+  if (!f.ok) {
+    std::fprintf(
+        stderr,
+        "cmd_vs_real_movements: cannot read assets/JetBrainsMono.ttf, "
+        "charts will have no text\n"
+    );
+  }
+  return f;
+}
+
+bool clipped(
+    const Image& im,
+    int x,
+    int y
+) {
+  return x < 0 || y < 0 || x >= im.w || y >= im.h || x < im.clip_x0 ||
+         y < im.clip_y0 || x >= im.clip_x1 || y >= im.clip_y1;
+}
+
+void put(
+    Image& im,
+    int x,
+    int y,
+    RGB c
+) {
+  if (clipped(im, x, y)) return;
+  const size_t i = (size_t(y) * im.w + x) * 3;
+  im.px[i] = c.r;
+  im.px[i + 1] = c.g;
+  im.px[i + 2] = c.b;
+}
+
+void blend(
+    Image& im,
+    int x,
+    int y,
+    unsigned char a,
+    RGB c
+) {
+  if (a < 16 || clipped(im, x, y)) return;
+  const size_t o = (size_t(y) * im.w + x) * 3;
+  const float t = float(a) / 255.0f;
+  im.px[o] = (unsigned char)(im.px[o] * (1 - t) + c.r * t);
+  im.px[o + 1] = (unsigned char)(im.px[o + 1] * (1 - t) + c.g * t);
+  im.px[o + 2] = (unsigned char)(im.px[o + 2] * (1 - t) + c.b * t);
+}
+
+void fill_rect(
+    Image& im,
+    int x,
+    int y,
+    int w,
+    int h,
+    RGB c
+) {
+  for (int j = y; j < y + h; j++)
+    for (int i = x; i < x + w; i++) put(im, i, j, c);
+}
+
+void rect(
+    Image& im,
+    int x,
+    int y,
+    int w,
+    int h,
+    RGB c
+) {
+  for (int i = x; i < x + w; i++) {
+    put(im, i, y, c);
+    put(im, i, y + h - 1, c);
+  }
+  for (int j = y; j < y + h; j++) {
+    put(im, x, j, c);
+    put(im, x + w - 1, j, c);
+  }
+}
+
+void line(
+    Image& im,
+    int x0,
+    int y0,
+    int x1,
+    int y1,
+    RGB c
+) {
+  int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+  int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy;
+  for (;;) {
+    put(im, x0, y0, c);
+    if (x0 == x1 && y0 == y1) break;
+    const int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y0 += sy;
+    }
+  }
+}
+
+int text_height(int scale) { return scale * PX_PER_SCALE; }
+
+int text_width(
+    const std::string& str,
+    int scale
+) {
+  Font& f = font();
+  if (!f.ok) return int(str.size()) * scale * PX_PER_SCALE / 2;
+  const float sf =
+      stbtt_ScaleForPixelHeight(&f.info, float(text_height(scale)));
+  float w = 0;
+  for (char ch : str) {
+    int aw = 0, lsb = 0;
+    stbtt_GetCodepointHMetrics(&f.info, (unsigned char)ch, &aw, &lsb);
+    w += float(aw) * sf;
+  }
+  return int(w);
+}
+
+std::vector<unsigned char> text_mask(
+    const std::string& str,
+    int scale,
+    int& w,
+    int& h
+) {
+  std::vector<unsigned char> mask;
+  Font& f = font();
+  w = h = 0;
+  if (!f.ok || str.empty()) return mask;
+  const float sf =
+      stbtt_ScaleForPixelHeight(&f.info, float(text_height(scale)));
+  int ascent = 0, descent = 0, gap = 0;
+  stbtt_GetFontVMetrics(&f.info, &ascent, &descent, &gap);
+  const int baseline = int(float(ascent) * sf);
+  h = int(float(ascent - descent) * sf) + 2;
+  float total = 0;
+  for (char ch : str) {
+    int aw = 0, lsb = 0;
+    stbtt_GetCodepointHMetrics(&f.info, (unsigned char)ch, &aw, &lsb);
+    total += float(aw) * sf;
+  }
+  w = int(total) + 2;
+  if (w <= 0 || h <= 0) return mask;
+  mask.assign(size_t(w) * h, 0);
+  float xpos = 0;
+  for (char ch : str) {
+    const int c = (unsigned char)ch;
+    int aw = 0, lsb = 0;
+    stbtt_GetCodepointHMetrics(&f.info, c, &aw, &lsb);
+    int gw = 0, gh = 0, gx = 0, gy = 0;
+    unsigned char* bmp =
+        stbtt_GetCodepointBitmap(&f.info, sf, sf, c, &gw, &gh, &gx, &gy);
+    if (bmp) {
+      for (int j = 0; j < gh; j++)
+        for (int i = 0; i < gw; i++) {
+          const int dx = int(xpos) + gx + i;
+          const int dy = baseline + gy + j;
+          if (dx < 0 || dy < 0 || dx >= w || dy >= h) continue;
+          unsigned char& d = mask[size_t(dy) * w + dx];
+          d = std::max(d, bmp[j * gw + i]);
+        }
+      stbtt_FreeBitmap(bmp, nullptr);
+    }
+    xpos += float(aw) * sf;
+  }
+  return mask;
+}
+
+void text(
+    Image& im,
+    int x,
+    int y,
+    const std::string& str,
+    RGB c,
+    int scale
+) {
+  int w = 0, h = 0;
+  const std::vector<unsigned char> m = text_mask(str, scale, w, h);
+  for (int j = 0; j < h; j++)
+    for (int i = 0; i < w; i++)
+      blend(im, x + i, y + j, m[size_t(j) * w + i], c);
+}
+
+void text_rot(
+    Image& im,
+    int x,
+    int y,
+    const std::string& str,
+    RGB c,
+    int scale
+) {
+  int w = 0, h = 0;
+  const std::vector<unsigned char> m = text_mask(str, scale, w, h);
+  for (int j = 0; j < h; j++)
+    for (int i = 0; i < w; i++)
+      blend(im, x + j, y - i, m[size_t(j) * w + i], c);
+}
+
+int sx(
+    const Axes& ax,
+    double x
+) {
+  return ax.px + int((x - ax.x0) / (ax.x1 - ax.x0) * (ax.pw - 1));
+}
+
+int sy(
+    const Axes& ax,
+    double y
+) {
+  return ax.py + ax.ph - 1 - int((y - ax.y0) / (ax.y1 - ax.y0) * (ax.ph - 1));
+}
+
+void polyline(
+    Image& im,
+    const Axes& ax,
+    const std::vector<double>& x,
+    const std::vector<double>& y,
+    RGB c
+) {
+  const Clip
+      clip(im, ax.px + 1, ax.py + 1, ax.px + ax.pw - 1, ax.py + ax.ph - 1);
+  for (size_t i = 1; i < std::min(x.size(), y.size()); ++i) {
+    line(im, sx(ax, x[i - 1]), sy(ax, y[i - 1]), sx(ax, x[i]), sy(ax, y[i]), c);
+  }
+}
+
+void marker(
+    Image& im,
+    const Axes& ax,
+    double x,
+    double y,
+    RGB c,
+    int r
+) {
+  const Clip
+      clip(im, ax.px + 1, ax.py + 1, ax.px + ax.pw - 1, ax.py + ax.ph - 1);
+  const int cx = sx(ax, x), cy = sy(ax, y);
+  for (int j = -r; j <= r; j++)
+    for (int i = -r; i <= r; i++)
+      if (i * i + j * j <= r * r) put(im, cx + i, cy + j, c);
+}
+
+}
 
 namespace {
 
@@ -29,28 +358,21 @@ constexpr double DEADZONE_MIN_SPEED = 0.025;
 constexpr int DEADZONE_BINS = 50;
 constexpr int GAP_GRID = 201;
 constexpr size_t GAP_MIN_RUNS = 50;
-constexpr double AXIS_LO = -0.08, AXIS_HI = 1.08;
+constexpr double AXIS_LO = -0.1, AXIS_HI = 1.1;
+constexpr int PLOT_X = 110, PLOT_Y = canvas::HEADER_H + canvas::STRIP_H;
+constexpr int PLOT_SIZE = 620;
+constexpr int SHEET_COLS = 3;
+constexpr canvas::RGB RED = {214, 39, 40};
+constexpr unsigned char DEADZONE_ALPHA = 64;
 
 const std::vector<std::string> GAINS = {"1.0", "1.5", "2.0"};
 const std::vector<std::string> MODES = {"rotate", "direction"};
 const std::vector<std::string> ENGINES = {"mujoco", "physx"};
 
-using Colour = std::array<float, 4>;
-const std::map<std::string, Colour> ENGINE_COLOUR = {
-    {"mujoco", {0.0f, 0.165f, 0.471f, 0.839f}},
-    {"physx", {0.0f, 0.922f, 0.408f, 0.204f}},
+const std::map<std::string, canvas::RGB> ENGINE_INK = {
+    {"mujoco", canvas::WHITE},
+    {"physx", canvas::BLACK},
 };
-const Colour INK = {0.0f, 0.043f, 0.043f, 0.043f};
-const Colour INK_SECONDARY = {0.0f, 0.322f, 0.318f, 0.306f};
-const Colour DEADZONE = {0.0f, 0.839f, 0.153f, 0.157f};
-
-Colour transparent(
-    Colour c,
-    float alpha
-) {
-  c[0] = 1.0f - alpha;
-  return c;
-}
 
 struct Run {
   double cmd_vx, cmd_vy, cmd_wz, vx, vy, wz;
@@ -234,7 +556,7 @@ Binned binned(
 }
 
 struct Fit {
-  double slope, intercept, rmse, r2;
+  double slope, intercept, r2;
 };
 
 Fit fit_line(
@@ -259,7 +581,7 @@ Fit fit_line(
   const double mean = sy / n;
   double st = 0;
   for (const double v : y) st += (v - mean) * (v - mean);
-  return {slope, intercept, std::sqrt(se / n), st > 0.0 ? 1.0 - se / st : 0.0};
+  return {slope, intercept, st > 0.0 ? 1.0 - se / st : 0.0};
 }
 
 struct Deadzone {
@@ -297,44 +619,286 @@ std::string fmt(
   return buf;
 }
 
+std::string upper(std::string s) {
+  for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
+  return s;
+}
+
+canvas::Image blank() {
+  canvas::Image im;
+  im.px.assign(size_t(canvas::TILE) * canvas::TILE * 3, 0);
+  canvas::fill_rect(im, 0, 0, canvas::TILE, canvas::TILE, canvas::BG);
+  canvas::rect(im, 0, 0, canvas::TILE, canvas::TILE, canvas::WHITE);
+  canvas::rect(im, 1, 1, canvas::TILE - 2, canvas::TILE - 2, canvas::WHITE);
+  return im;
+}
+
+void header(
+    canvas::Image& im,
+    const std::string& title,
+    const std::string& caption,
+    const std::string& value,
+    const std::string& detail
+) {
+  const int x = 16 + canvas::text_width(title, canvas::TITLE_SCALE) + 16;
+  canvas::text(im, 16, 12, title, canvas::WHITE, canvas::TITLE_SCALE);
+  canvas::text(im, x, 12, caption, canvas::WHITE, canvas::TITLE_SCALE);
+  canvas::text(im, 16, 44, value, canvas::WHITE, canvas::TITLE_SCALE);
+  canvas::text(
+      im,
+      16 + canvas::text_width(value, canvas::TITLE_SCALE) + 16,
+      44,
+      detail,
+      canvas::WHITE,
+      canvas::TITLE_SCALE
+  );
+}
+
+void dashed(
+    canvas::Image& im,
+    const canvas::Axes& ax,
+    double x0,
+    double y0,
+    double x1,
+    double y1,
+    int on,
+    int off
+) {
+  const canvas::Clip
+      clip(im, ax.px + 1, ax.py + 1, ax.px + ax.pw - 1, ax.py + ax.ph - 1);
+  const int a = canvas::sx(ax, x0), b = canvas::sy(ax, y0);
+  const int dx = canvas::sx(ax, x1) - a, dy = canvas::sy(ax, y1) - b;
+  const int n = std::max(std::abs(dx), std::abs(dy));
+  for (int i = 0; i <= n; ++i) {
+    if (i % (on + off) >= on) continue;
+    const int x = a + int(std::lround(double(dx) * i / n));
+    const int y = b + int(std::lround(double(dy) * i / n));
+    canvas::put(im, x, y, canvas::WHITE);
+  }
+}
+
+canvas::Axes plot_box(
+    canvas::Image& im,
+    const std::string& unit
+) {
+  canvas::Axes ax;
+  ax.px = PLOT_X;
+  ax.py = PLOT_Y;
+  ax.pw = ax.ph = PLOT_SIZE;
+  ax.x0 = ax.y0 = AXIS_LO;
+  ax.x1 = ax.y1 = AXIS_HI;
+  canvas::fill_rect(im, ax.px, ax.py, ax.pw, ax.ph, canvas::BG);
+  canvas::rect(im, ax.px, ax.py, ax.pw, ax.ph, canvas::WHITE);
+  const int ts = canvas::LABEL_SCALE;
+  for (int i = int(std::ceil(AXIS_LO * 10)); i <= int(AXIS_HI * 10); ++i) {
+    const double v = 0.1 * i;
+    const int x = canvas::sx(ax, v), y = canvas::sy(ax, v);
+    for (int k = ax.py; k < ax.py + ax.ph; k += 4) {
+      canvas::put(im, x, k, canvas::WHITE);
+    }
+    for (int k = ax.px; k < ax.px + ax.pw; k += 4) {
+      canvas::put(im, k, y, canvas::WHITE);
+    }
+    if (i < 0 || i % 2) continue;
+    for (int k = 0; k < 4; ++k) {
+      canvas::put(im, x, ax.py + ax.ph + k, canvas::WHITE);
+      canvas::put(im, ax.px - 1 - k, y, canvas::WHITE);
+    }
+    const std::string t = fmt("%.1f", v);
+    canvas::text(
+        im,
+        x - canvas::text_width(t, ts) / 2,
+        ax.py + ax.ph + 1,
+        t,
+        canvas::WHITE,
+        ts
+    );
+    canvas::text(
+        im,
+        ax.px - 1 - canvas::text_width(t, ts),
+        y - canvas::text_height(ts) / 2,
+        t,
+        canvas::WHITE,
+        ts
+    );
+  }
+  dashed(im, ax, AXIS_LO, AXIS_LO, AXIS_HI, AXIS_HI, 2, 4);
+  const std::string xlabel = "COMMANDED (" + unit + ")";
+  const std::string ylabel = "MEASURED (" + unit + ")";
+  canvas::text(
+      im,
+      ax.px + (ax.pw - canvas::text_width(xlabel, ts)) / 2,
+      ax.py + ax.ph + 1 + canvas::text_height(ts),
+      xlabel,
+      canvas::WHITE,
+      ts
+  );
+  canvas::text_rot(
+      im,
+      ax.px - canvas::text_width("-0.1", ts) - canvas::text_height(ts) - 2,
+      ax.py + (ax.ph + canvas::text_width(ylabel, ts)) / 2,
+      ylabel,
+      canvas::WHITE,
+      ts
+  );
+  return ax;
+}
+
 void draw_engine(
-    const mp::axes_handle& ax,
+    canvas::Image& im,
+    const canvas::Axes& ax,
     const std::vector<double>& x,
     const std::vector<double>& y,
-    const std::string& engine
+    canvas::RGB ink
 ) {
   const Binned b = binned(x, y, BINS);
   if (b.centre.empty()) return;
-  std::vector<double> px = b.centre, py = b.q1;
-  for (size_t i = b.centre.size(); i-- > 0;) {
-    px.push_back(b.centre[i]);
-    py.push_back(b.q3[i]);
+  {
+    const canvas::Clip
+        clip(im, ax.px + 1, ax.py + 1, ax.px + ax.pw - 1, ax.py + ax.ph - 1);
+    for (size_t i = 0; i < b.centre.size(); ++i) {
+      const int cx =
+          canvas::sx(ax, b.centre[i]) + (ink.r == canvas::WHITE.r ? 1 : -1);
+      const int lo = canvas::sy(ax, b.q1[i]), hi = canvas::sy(ax, b.q3[i]);
+      canvas::line(im, cx, lo, cx, hi, ink);
+      canvas::line(im, cx - 3, lo, cx + 3, lo, ink);
+      canvas::line(im, cx - 3, hi, cx + 3, hi, ink);
+    }
   }
-  mp::fill(ax, px, py)->color(transparent(ENGINE_COLOUR.at(engine), 0.18f));
-  auto line = mp::plot(ax, b.centre, b.median, "-o");
-  line->line_width(2).marker_size(4).color(ENGINE_COLOUR.at(engine));
+  for (int k = 0; k < 4; ++k) {
+    canvas::Axes thick = ax;
+    thick.px += k % 2;
+    thick.py += k / 2;
+    canvas::polyline(im, thick, b.centre, b.median, ink);
+  }
+  for (size_t i = 0; i < b.centre.size(); ++i) {
+    canvas::marker(im, ax, b.centre[i], b.median[i], ink, 6);
+  }
 }
 
-void reference(const mp::axes_handle& ax) {
-  auto diagonal = mp::plot(
-      ax,
-      std::vector<double>{0.0, 1.0},
-      std::vector<double>{0.0, 1.0},
-      "--"
-  );
-  diagonal->color(INK_SECONDARY).line_width(1);
-}
-
-void note(
-    const mp::axes_handle& ax,
-    double x,
-    double y,
-    const std::string& s,
-    const Colour& c,
-    float size
+void deadzone_box(
+    canvas::Image& im,
+    const canvas::Axes& ax,
+    const Deadzone& dz
 ) {
-  auto t = mp::text(ax, x, y, s);
-  t->color(c).font_size(size);
+  const canvas::Clip
+      clip(im, ax.px + 1, ax.py + 1, ax.px + ax.pw - 1, ax.py + ax.ph - 1);
+  const int x0 = canvas::sx(ax, 0.0), y1 = canvas::sy(ax, 0.0);
+  const int x1 = canvas::sx(ax, dz.command), y0 = canvas::sy(ax, dz.speed);
+  for (int y = y0; y <= y1; ++y) {
+    for (int x = x0; x <= x1; ++x) canvas::blend(im, x, y, DEADZONE_ALPHA, RED);
+  }
+}
+
+void lines_right(
+    canvas::Image& im,
+    const canvas::Axes& ax,
+    const std::vector<std::string>& lines
+) {
+  const int s = canvas::LABEL_SCALE, lh = canvas::text_height(s) + 6;
+  int w = 0;
+  for (const std::string& line : lines) {
+    w = std::max(w, canvas::text_width(line, s));
+  }
+  const int x = ax.px + ax.pw - 12 - w - 8;
+  const int y = ax.py + ax.ph - 12 - lh * int(lines.size()) - 6;
+  canvas::fill_rect(im, x, y, w + 16, lh * int(lines.size()) + 10, canvas::BG);
+  canvas::rect(im, x, y, w + 16, lh * int(lines.size()) + 10, canvas::WHITE);
+  for (size_t k = 0; k < lines.size(); ++k) {
+    canvas::text(
+        im,
+        ax.px + ax.pw - 12 - canvas::text_width(lines[k], s),
+        ax.py + ax.ph - 12 - lh * int(lines.size() - k),
+        lines[k],
+        canvas::WHITE,
+        s
+    );
+  }
+}
+
+void lines_centre(
+    canvas::Image& im,
+    const canvas::Axes& ax,
+    const std::vector<std::string>& lines
+) {
+  const int s = canvas::LABEL_SCALE, lh = canvas::text_height(s) + 10;
+  const int top = ax.py + (ax.ph - lh * int(lines.size())) / 2;
+  for (size_t k = 0; k < lines.size(); ++k) {
+    const int w = canvas::text_width(lines[k], s);
+    canvas::fill_rect(
+        im,
+        ax.px + (ax.pw - w) / 2 - 6,
+        top + lh * int(k) - 3,
+        w + 12,
+        canvas::text_height(s) + 6,
+        canvas::BG
+    );
+    canvas::text(
+        im,
+        ax.px + (ax.pw - w) / 2,
+        top + lh * int(k),
+        lines[k],
+        canvas::WHITE,
+        s
+    );
+  }
+}
+
+enum class Swatch { DOT_WHITE, DOT_BLACK, DOTTED, BOX, WHISKER };
+
+void key(
+    canvas::Image& im,
+    const canvas::Axes& ax,
+    const std::vector<std::pair<
+        Swatch,
+        std::string>>& items
+) {
+  const int s = canvas::LABEL_SCALE, lh = canvas::text_height(s) + 8;
+  int w = 0;
+  for (const auto& item : items) {
+    w = std::max(w, canvas::text_width(item.second, s));
+  }
+  w += 44;
+  const int h = int(items.size()) * lh + 8;
+  const int x = ax.px + 8, y = ax.py + 8;
+  canvas::fill_rect(im, x, y, w, h, canvas::BG);
+  canvas::rect(im, x, y, w, h, canvas::WHITE);
+  for (size_t i = 0; i < items.size(); ++i) {
+    const int ly = y + 4 + int(i) * lh;
+    const int cy = ly + canvas::text_height(s) / 2;
+    switch (items[i].first) {
+      case Swatch::DOT_WHITE:
+      case Swatch::DOT_BLACK: {
+        const canvas::RGB ink =
+            items[i].first == Swatch::DOT_WHITE ? canvas::WHITE : canvas::BLACK;
+        canvas::fill_rect(im, x + 6, cy, 22, 2, ink);
+        for (int j = -6; j <= 6; ++j) {
+          for (int k = -6; k <= 6; ++k) {
+            if (j * j + k * k <= 36) canvas::put(im, x + 17 + k, cy + j, ink);
+          }
+        }
+        break;
+      }
+      case Swatch::DOTTED:
+        for (int k = 6; k < 28; k += 6) {
+          canvas::fill_rect(im, x + k, cy, 2, 1, canvas::WHITE);
+        }
+        break;
+      case Swatch::BOX:
+        for (int j = cy - 6; j <= cy + 6; ++j) {
+          for (int k = x + 8; k <= x + 26; ++k) {
+            canvas::blend(im, k, j, DEADZONE_ALPHA, RED);
+          }
+        }
+        break;
+      case Swatch::WHISKER:
+        canvas::fill_rect(im, x + 17, cy - 7, 1, 15, canvas::WHITE);
+        canvas::fill_rect(im, x + 14, cy - 7, 7, 1, canvas::WHITE);
+        canvas::fill_rect(im, x + 14, cy + 7, 7, 1, canvas::WHITE);
+        break;
+    }
+    canvas::text(im, x + 36, ly, items[i].second, canvas::WHITE, s);
+  }
 }
 
 struct Panel {
@@ -343,131 +907,130 @@ struct Panel {
   std::vector<double> deadzones;
 };
 
-std::vector<Panel> grid_chart(
+canvas::Image mode_tile(
     const std::string& policy,
     const fs::path& results,
-    const fs::path& out,
-    const std::map<
-        std::string,
-        std::pair<
-            bool,
-            std::string>>& accepted
+    const std::string& mode,
+    const std::string& gain,
+    const std::pair<
+        bool,
+        std::string>& accepted,
+    std::vector<Panel>& panels
 ) {
-  std::vector<Panel> panels;
-  auto f = mp::figure(true);
-  f->size(1650, 1150);
-  std::string shown;
-  for (const char ch : policy) {
-    if (ch == '_') shown += "\\\\";
-    shown += ch;
-  }
-  f->title(
-      shown +
-      ": commanded vs measured   (blue mujoco, orange physx, black "
-      "line fit over both, red deadzone per engine)"
+  const std::string unit = mode == "rotate" ? "rad/s" : "m/s";
+  const std::string caption = "LEGS KP/KD X" + gain;
+  canvas::Image im = blank();
+  canvas::text(
+      im,
+      PLOT_X,
+      canvas::HEADER_H + 2,
+      mode == "rotate"
+          ? "MEASURED YAW RATE VS COMMAND, 2-10 S, FALLEN RUNS EXCLUDED"
+          : "MEASURED PLANAR SPEED VS COMMAND, 2-10 S, FALLEN RUNS EXCLUDED",
+      canvas::WHITE,
+      canvas::LABEL_SCALE
   );
-  for (size_t r = 0; r < MODES.size(); ++r) {
-    const std::string& mode = MODES[r];
-    const std::string unit = mode == "rotate" ? "rad/s" : "m/s";
-    for (size_t c = 0; c < GAINS.size(); ++c) {
-      const std::string& gain = GAINS[c];
-      auto ax = mp::subplot(
-          f,
-          int(MODES.size()),
-          int(GAINS.size()),
-          int(r * GAINS.size() + c)
+  const canvas::Axes ax = plot_box(im, unit);
+  const auto& [ok, why] = accepted;
+  if (!ok) {
+    header(im, upper(mode), caption, "NOT ACCEPTED", "TOO MANY RUNS FALL");
+    std::vector<std::string> lines;
+    std::istringstream reasons(why);
+    for (std::string reason; std::getline(reasons, reason, ';');) {
+      lines.push_back(upper(reason.substr(reason.find_first_not_of(' '))));
+    }
+    lines_centre(im, ax, lines);
+    return im;
+  }
+  std::vector<double> all_x, all_y, zones;
+  std::vector<std::string> notes;
+  struct Trace {
+    std::vector<double> x, y;
+    canvas::RGB ink;
+  };
+  std::vector<Trace> traces;
+  for (size_t e = ENGINES.size(); e-- > 0;) {
+    const std::string& engine = ENGINES[e];
+    const canvas::RGB ink = ENGINE_INK.at(engine);
+    const Runs runs =
+        read_runs(batches(results / (mode + "_gainx" + gain), policy, engine));
+    std::vector<double> x, y;
+    bench_xy(mode, runs.complete, x, y);
+    std::vector<std::string> note = {
+        upper(engine) + " " + std::to_string(runs.complete.size()) + " OK / " +
+        std::to_string(runs.fell) + " FELL"
+    };
+    if (!x.empty()) {
+      traces.push_back({x, y, ink});
+      const std::optional<Deadzone> dz = deadzone(x, y);
+      zones.insert(zones.begin(), dz ? dz->command : 1.0);
+      if (dz) deadzone_box(im, ax, *dz);
+      note.push_back(
+          upper(engine) + " DEADZONE " +
+          (dz ? fmt("%.3f, FIRST SPEED %.3f ", dz->command, dz->speed) + unit
+              : std::string("NONE"))
       );
-      mp::hold(ax, true);
-      mp::title(ax, mode + " · legs KP/KD x" + gain);
-      mp::xlabel(ax, "commanded (" + unit + ")");
-      mp::ylabel(ax, "measured (" + unit + ")");
-      mp::xlim(ax, {AXIS_LO, AXIS_HI});
-      mp::ylim(ax, {AXIS_LO, AXIS_HI});
-      mp::axis(ax, mp::square);
-      reference(ax);
-      const auto& [ok, why] = accepted.at(gain);
-      if (!ok) {
-        std::vector<std::string> lines = {"not accepted:"};
-        std::istringstream reasons(why);
-        for (std::string reason; std::getline(reasons, reason, ';');) {
-          lines.push_back(reason.substr(reason.find_first_not_of(' ')));
-        }
-        lines.push_back("(runs falling within 10 s)");
-        for (size_t k = 0; k < lines.size(); ++k) {
-          note(
-              ax,
-              0.05,
-              0.6 - 0.08 * double(k),
-              lines[k],
-              INK_SECONDARY,
-              k ? 8 : 9
-          );
-        }
-        continue;
-      }
-      std::vector<double> all_x, all_y, panel_zones;
-      std::vector<std::string> counts, zones;
-      for (const std::string& engine : ENGINES) {
-        const Runs runs = read_runs(
-            batches(results / (mode + "_gainx" + gain), policy, engine)
-        );
-        counts.push_back(
-            engine + " " + std::to_string(runs.complete.size()) + " ok / " +
-            std::to_string(runs.fell) + " fell"
-        );
-        std::vector<double> x, y;
-        bench_xy(mode, runs.complete, x, y);
-        if (x.empty()) {
-          zones.push_back(engine + " deadzone: no runs");
-          continue;
-        }
-        draw_engine(ax, x, y, engine);
-        const std::optional<Deadzone> dz = deadzone(x, y);
-        panel_zones.push_back(dz ? dz->command : 1.0);
-        if (dz) {
-          auto rect = mp::rectangle(ax, 0.0, 0.0, dz->command, dz->speed);
-          rect->fill(true).color(transparent(DEADZONE, 0.2f));
-          zones.push_back(
-              engine + " deadzone " + fmt("%.3f", dz->command) +
-              ", first speed " + fmt("%.3f", dz->speed) + " " + unit
-          );
-        } else {
-          zones.push_back(engine + " deadzone: none");
-        }
-        all_x.insert(all_x.end(), x.begin(), x.end());
-        all_y.insert(all_y.end(), y.begin(), y.end());
-      }
-      if (!all_x.empty()) {
-        const Fit fit = fit_line(all_x, all_y);
-        panels.push_back({mode, gain, fit.r2, fit.slope, panel_zones});
-        auto line = mp::plot(
-            ax,
-            std::vector<double>{0.0, 1.0},
-            std::vector<double>{fit.intercept, fit.slope + fit.intercept}
-        );
-        line->color(INK).line_width(1.5);
-        note(
-            ax,
-            0.0,
-            1.0,
-            fmt("fit: slope %.2f, R^2 %.2f, RMSE %.3f",
-                fit.slope,
-                fit.r2,
-                fit.rmse),
-            INK,
-            9
-        );
-      }
-      for (size_t k = 0; k < zones.size(); ++k) {
-        note(ax, 0.0, 0.92 - 0.07 * double(k), zones[k], DEADZONE, 8);
-      }
-      for (size_t k = 0; k < counts.size(); ++k) {
-        note(ax, 0.45, 0.08 - 0.07 * double(k), counts[k], INK_SECONDARY, 7);
-      }
+      all_x.insert(all_x.end(), x.begin(), x.end());
+      all_y.insert(all_y.end(), y.begin(), y.end());
+    }
+    notes.insert(notes.begin(), note.begin(), note.end());
+  }
+  for (const Trace& t : traces) draw_engine(im, ax, t.x, t.y, t.ink);
+  if (all_x.empty()) {
+    header(im, upper(mode), caption, "NO RUNS", "");
+    return im;
+  }
+  const Fit fit = fit_line(all_x, all_y);
+  panels.push_back({mode, gain, fit.r2, fit.slope, zones});
+  header(im, upper(mode), caption, "", "");
+  key(im,
+      ax,
+      {{Swatch::DOT_WHITE, "MUJOCO, MEDIAN PER BIN"},
+       {Swatch::DOT_BLACK, "PHYSX, MEDIAN PER BIN"},
+       {Swatch::WHISKER, "QUARTILES PER BIN"},
+       {Swatch::DOTTED, "MEASURED = COMMANDED"},
+       {Swatch::BOX, "DEADZONE PER ENGINE"}});
+  lines_right(im, ax, notes);
+  return im;
+}
+
+struct Score {
+  std::string policy, gain;
+  double r2;
+  std::map<std::string, double> mode_r2, mode_deadzone, mode_slope;
+  int rank_walk = 0, rank_rotate = 0, rank_walk_zone = 0, rank_rotate_zone = 0;
+  int rank_sum() const {
+    return rank_walk + rank_rotate + rank_walk_zone + rank_rotate_zone;
+  }
+};
+
+void write_sheet(
+    const std::vector<canvas::Image>& tiles,
+    int cols,
+    const fs::path& path
+) {
+  const int rows = (int(tiles.size()) + cols - 1) / cols;
+  const int W = cols * canvas::TILE, H = rows * canvas::TILE;
+  std::vector<unsigned char> px(size_t(W) * H * 3);
+  for (size_t i = 0; i + 2 < px.size(); i += 3) {
+    px[i] = canvas::BG.r;
+    px[i + 1] = canvas::BG.g;
+    px[i + 2] = canvas::BG.b;
+  }
+  for (size_t k = 0; k < tiles.size(); ++k) {
+    const int cx = int(k % size_t(cols)) * canvas::TILE;
+    const int cy = int(k / size_t(cols)) * canvas::TILE;
+    for (int y = 0; y < canvas::TILE; ++y) {
+      std::memcpy(
+          &px[(size_t(cy + y) * W + cx) * 3],
+          &tiles[k].px[size_t(y) * canvas::TILE * 3],
+          size_t(canvas::TILE) * 3
+      );
     }
   }
-  mp::save(f, out.string());
-  return panels;
+  if (!stbi_write_png(path.c_str(), W, H, 3, px.data(), W * 3)) {
+    throw std::runtime_error("cannot write " + path.string());
+  }
 }
 
 std::vector<double> yaw_curve(const std::vector<fs::path>& paths) {
@@ -639,16 +1202,7 @@ int main(
     const fs::path ext = entry.path().extension();
     if (ext == ".png" || ext == ".jpg") fs::remove(entry.path());
   }
-  struct Score {
-    std::string policy, gain;
-    double r2, deadzone;
-    std::map<std::string, double> mode_r2, mode_deadzone, mode_slope;
-    int rank_walk = 0, rank_rotate = 0, rank_walk_zone = 0,
-        rank_rotate_zone = 0;
-    int rank_sum() const {
-      return rank_walk + rank_rotate + rank_walk_zone + rank_rotate_zone;
-    }
-  };
+  std::map<std::string, std::vector<canvas::Image>> sheets;
   std::vector<Score> scores;
   for (const std::string& policy : policies) {
     std::map<std::string, std::pair<bool, std::string>> accepted;
@@ -672,12 +1226,18 @@ int main(
       std::printf("skip %s: no legs KP/KD gain accepted\n", policy.c_str());
       continue;
     }
-    const fs::path file = out / (policy + ".png");
-    const std::vector<Panel> panels =
-        grid_chart(policy, results, file, accepted);
+    std::vector<Panel> panels;
+    std::vector<canvas::Image>& tiles = sheets[policy];
+    for (const std::string& mode : MODES) {
+      for (const std::string& gain : GAINS) {
+        tiles.push_back(
+            mode_tile(policy, results, mode, gain, accepted[gain], panels)
+        );
+      }
+    }
     for (const std::string& gain : GAINS) {
-      double r2 = 0.0, zone = 0.0;
-      int n_r2 = 0, n_zone = 0;
+      double r2 = 0.0;
+      int n_r2 = 0;
       std::map<std::string, double> mode_r2, mode_zone, mode_slope;
       for (const Panel& p : panels) {
         if (p.gain != gain) continue;
@@ -686,22 +1246,12 @@ int main(
         mode_r2[p.mode] = p.r2;
         mode_slope[p.mode] = p.slope;
         double panel_zone = 0.0;
-        for (const double z : p.deadzones) {
-          zone += z;
-          ++n_zone;
-          panel_zone += z;
-        }
+        for (const double z : p.deadzones) panel_zone += z;
         mode_zone[p.mode] = panel_zone / double(p.deadzones.size());
       }
       if (n_r2 == 0) continue;
       scores.push_back(
-          {policy,
-           gain,
-           r2 / n_r2,
-           zone / n_zone,
-           mode_r2,
-           mode_zone,
-           mode_slope}
+          {policy, gain, r2 / n_r2, mode_r2, mode_zone, mode_slope}
       );
       break;
     }
@@ -794,7 +1344,9 @@ int main(
     const Score& sc = scores[i];
     char prefix[8];
     std::snprintf(prefix, sizeof(prefix), "%03zu_", i);
-    fs::rename(out / (sc.policy + ".png"), out / (prefix + sc.policy + ".png"));
+    std::vector<canvas::Image>& tiles = sheets.at(sc.policy);
+    write_sheet(tiles, SHEET_COLS, out / (prefix + sc.policy + ".png"));
+    tiles.clear();
     const std::string values =
         " | x" + sc.gain + " | " + linearity(sc.mode_r2.at("direction")) +
         " | " + linearity(sc.mode_r2.at("rotate")) + " | " +

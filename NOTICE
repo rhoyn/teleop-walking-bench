@@ -406,7 +406,8 @@ declare a Reserved Font Name.
 The bundled assets/JetBrainsMono.ttf is JetBrains Mono Regular, version 2.211,
 reduced to the 394 glyphs this program renders. Under the terms below that
 makes it a Modified Version. It is used only to letter the policy name onto
-the floor of a recorded clip; it is not part of the benchmark and carries no
+the floor of a recorded clip and to draw text into the charts under
+results/cmd_vs_real_movements; it is not part of the benchmark and carries no
 license obligation onto the rest of this repository, which is MIT licensed;
 see LICENSE.
 
