@@ -32,6 +32,7 @@ if [ "$MODE" = tour ]; then
   VIDEO=${VIDEO:-assets/preview.mp4}
   IMAGE=${IMAGE:-assets/preview.jpg}
   STILL=${STILL:-44.6}
+  CRF=${CRF:-24}
 else
   WORK=${WORK:-build/preview-clips-$MODE}
   VIDEO=${VIDEO:-assets/preview_$MODE.mp4}
@@ -43,7 +44,7 @@ CRF=${CRF:-20}
 MAX_BYTES=${MAX_BYTES:-10000000}
 BIN=${BIN:-build/teleop-walking-benchmark}
 DELAY=${DELAY:-20}
-export MODE RUNID NICE CPUS WORK BIN DELAY SCALE
+export MODE RUNID NICE CPUS WORK BIN DELAY SCALE NGPUS
 
 SCALE=1
 [ "$MODE" = tour ] || SCALE=${SCALE_MOVEMENTS:-2}
@@ -53,7 +54,7 @@ FONT=assets/JetBrainsMono.ttf
 ENGINES=${ENGINES:-"physx mujoco"}
 
 if [ "$MODE" = tour ]; then
-  POLICIES=${POLICIES:-$(build/table results/punches_gainx1.0/*.csv | sed 's/`<br>`/_/' |
+  POLICIES=${POLICIES:-$(build/table results/punches_gainx1.0/*.csv | sed 's/`<br>`/_/g' |
     sed -n 's/^| ~*`\([a-z0-9_]*\)`.*/\1/p')}
 else
   POLICIES=${POLICIES:-$(ls results/cmd_vs_real_movements/[0-9][0-9][0-9]_*.png |
@@ -74,7 +75,7 @@ fi
 RUN='
   out=$WORK/$1/$0
   sleep $((RANDOM % (DELAY + 1)))
-  nice -n "$NICE" taskset -c "$CPUS" "$BIN" --mode "$MODE" --engine "$1" --policy "$0" \
+  CUDA_VISIBLE_DEVICES=$(($2 % NGPUS)) nice -n "$NICE" taskset -c "$CPUS" "$BIN" --mode "$MODE" --engine "$1" --policy "$0" \
     --runid "$RUNID" --record "$WORK/$1" --record-scale "$SCALE" --csv "$out.csv" \
     >"$out.log" 2>&1 &&
     echo "[$(ls "$WORK"/*/*.mp4 2>/dev/null | wc -l)/$TOTAL] $0 on $1" ||
@@ -86,9 +87,13 @@ rm -rf "$WORK"
 for e in $ENGINES; do mkdir -p "$WORK/$e"; done
 echo "recording $TOTAL clips, $JOBS at a time"
 
+i=0
 for p in $POLICIES; do
-  for e in $ENGINES; do echo "$p $e"; done
-done | xargs -P "$JOBS" -n 2 bash -c "$RUN"
+  for e in $ENGINES; do
+    echo "$p $e $i"
+    i=$((i + 1))
+  done
+done | xargs -P "$JOBS" -n 3 bash -c "$RUN"
 
 clips=() layout= scale= stack= n=0
 for p in $POLICIES; do

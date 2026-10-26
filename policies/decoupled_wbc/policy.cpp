@@ -45,7 +45,7 @@ const float KPS[NUM_ACTIONS] =
     {150, 150, 100, 150, 40, 40, 150, 150, 100, 150, 40, 40, 200, 150, 150};
 const float KDS[NUM_ACTIONS] = {3, 3, 2, 4, 2, 2, 3, 3, 2, 4, 2, 2, 4, 4, 4};
 
-const policy_api::Limits LIMITS = {-0.5, 0.5, 0.5, 1.0, 0.5};
+const policy_api::Limits LIMITS = {-0.3, 0.3, 0.3, 0.5, 0.3};
 
 __global__ void k_decoupled_wbc_obs(
     const float* __restrict__ motor_q,
@@ -109,6 +109,7 @@ __global__ void k_decoupled_wbc_act(
 struct Policy : policy_api::Policy {
   std::shared_ptr<policy_api::Engine> engine;
   float *d_obs = nullptr, *d_act = nullptr, *d_last = nullptr;
+  policy_api::CmdRamp ramp;
   int envs = 0;
   const Variant variant;
 
@@ -133,6 +134,7 @@ struct Policy : policy_api::Policy {
     cudaMalloc(&d_act, size_t(n) * NUM_ACTIONS * sizeof(float));
     cudaMalloc(&d_last, size_t(n) * NUM_ACTIONS * sizeof(float));
     cudaMemset(d_last, 0, size_t(n) * NUM_ACTIONS * sizeof(float));
+    ramp.init(n);
   }
 
   void step(const policy_api::Ctx& c) override {
@@ -142,7 +144,7 @@ struct Policy : policy_api::Policy {
         c.motor_dq,
         c.gyro,
         c.gravity,
-        c.cmd,
+        ramp.apply(c.cmd, envs),
         d_last,
         d_obs,
         variant.height,

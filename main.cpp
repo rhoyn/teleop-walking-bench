@@ -111,6 +111,7 @@ struct Ctx {
 
   const float* arm_pose;
   const float* base_quat;
+  const float* base_pos;
 
   float* q_target;
 };
@@ -124,6 +125,52 @@ struct Policy {
   virtual int owned() const = 0;
   virtual Limits limits() const = 0;
   virtual const char* name() const = 0;
+  virtual bool set_reference(int) { return false; }
+};
+
+inline std::function<std::unique_ptr<Physics>(int envs, const Policy& driver)>
+    make_ghost;
+
+inline bool tour = true;
+
+constexpr float RAMP_LIN = 0.3f, RAMP_YAW = 0.5f, RAMP_DT = 0.02f;
+
+__global__ void k_ramp_cmd(
+    const float* __restrict__ cmd,
+    float* __restrict__ ramped,
+    int envs
+) {
+  const int env = blockIdx.x * blockDim.x + threadIdx.x;
+  if (env >= envs) return;
+
+  for (int k = 0; k < 3; ++k) {
+    const float step = RAMP_DT * (k < 2 ? RAMP_LIN : RAMP_YAW);
+    float& r = ramped[env * 3 + k];
+    r += fminf(fmaxf(cmd[env * 3 + k] - r, -step), step);
+  }
+}
+
+struct CmdRamp {
+  float* d = nullptr;
+
+  ~CmdRamp() {
+    if (d) cudaFree(d);
+  }
+
+  void init(int envs) {
+    cudaMalloc(&d, size_t(envs) * 3 * sizeof(float));
+    cudaMemset(d, 0, size_t(envs) * 3 * sizeof(float));
+  }
+
+  const float* apply(
+      const float* cmd,
+      int envs
+  ) {
+    if (!tour) return cmd;
+    const int threads = 128, blocks = (envs + threads - 1) / threads;
+    k_ramp_cmd<<<blocks, threads>>>(cmd, d, envs);
+    return d;
+  }
 };
 
 struct TensorSpec {
@@ -548,6 +595,10 @@ std::shared_ptr<Engine> engine_make(
   const std::lock_guard<std::mutex> hold(plan_lock());
   if (batch < 1)
     throw std::runtime_error("trt: a plan needs a batch of at least one");
+  // A plan built for exactly one row fixes every shape at 1, and the SONIC
+  // planner built that way returns garbage after its first frame. A plan
+  // built for two keeps the batch dynamic and runs one row correctly.
+  if (batch == 1) batch = 2;
 
   std::string key;
   for (const TensorSpec& t : inputs) {
@@ -677,10 +728,11 @@ void engine_run(
 #include "policies/huru/policy.cpp"
 #include "policies/josabb/policy.cpp"
 #include "policies/legged_rl_lab/policy.cpp"
+#include "policies/openwbt/policy.cpp"
 #include "policies/mimic_lite/policy.cpp"
+#include "policies/morphmimic/policy.cpp"
 #include "policies/mturan33/policy.cpp"
 #include "policies/nanog1/policy.cpp"
-#include "policies/openwbt/policy.cpp"
 #include "policies/rl_gym/policy.cpp"
 #include "policies/rl_lab/policy.cpp"
 #include "policies/rl_mjlab/policy.cpp"
@@ -689,6 +741,9 @@ void engine_run(
 #include "policies/schoi/policy.cpp"
 #include "policies/sonic/policy.cpp"
 #include "policies/stepdown/policy.cpp"
+#include "policies/supermimic/policy.cpp"
+#include "policies/supermimic_breezewrf/policy.cpp"
+#include "policies/supermimic_vibed/policy.cpp"
 #include "policies/sunny/policy.cpp"
 #include "policies/wbc_agile/policy.cpp"
 #include "policies/wbc_agile_velocity/policy.cpp"
@@ -715,7 +770,6 @@ const char* const NAMES[] = {
     "huru",
     "josabb",
     "legged_rl_lab",
-    "mimic_lite",
     "mturan33",
     "nanog1",
     "openwbt",
@@ -744,12 +798,54 @@ std::vector<std::string> policy_names() {
   names.insert(names.begin(), gr00t.begin(), gr00t.end());
   const std::vector<std::string> decoupled = decoupled_wbc::names();
   names.insert(names.end(), decoupled.begin(), decoupled.end());
+  const std::vector<std::string> vibed = supermimic_vibed::names();
+  const std::vector<std::string> sm = supermimic::names();
+
+  std::vector<std::string> trackers = {
+      "mimic_lite",
+      "morphmimic",
+      "supermimic_breezewrf"
+  };
+  trackers.insert(trackers.end(), sm.begin(), sm.end());
+  trackers.insert(trackers.end(), vibed.begin(), vibed.end());
+  for (const std::string& t : trackers) {
+    for (int ref : mimic_lite::REFERENCES)
+      names.push_back(t + mimic_lite::reference_suffix(ref));
+  }
   return names;
 }
 
+std::unique_ptr<policy_api::Policy> make_base_policy(const std::string& name);
+
 std::unique_ptr<policy_api::Policy> make_policy(const std::string& name) {
+  for (int ref : mimic_lite::REFERENCES) {
+    const std::string suffix = mimic_lite::reference_suffix(ref);
+    if (name.size() <= suffix.size() ||
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+      continue;
+    std::unique_ptr<policy_api::Policy> p =
+        make_base_policy(name.substr(0, name.size() - suffix.size()));
+    if (!p->set_reference(ref))
+      throw std::runtime_error(
+          "policy '" + name.substr(0, name.size() - suffix.size()) +
+          "' does not track a reference, so it has no " + suffix + " variant"
+      );
+    return p;
+  }
+  std::unique_ptr<policy_api::Policy> p = make_base_policy(name);
+  if (p->set_reference(mimic_lite::REF_SONIC))
+    throw std::runtime_error(
+        "policy '" + name + "' tracks a reference; name it " + name +
+        "_sonicplnr, " + name + "_openwbtplnr or " + name + "_gr00twbcplnr"
+    );
+  return p;
+}
+
+std::unique_ptr<policy_api::Policy> make_base_policy(const std::string& name) {
   if (auto gr00t = gr00t_wbc::make(name)) return gr00t;
   if (auto dec = decoupled_wbc::make(name)) return dec;
+  if (auto vibed = supermimic_vibed::make(name)) return vibed;
+  if (auto sm = supermimic::make(name)) return sm;
   if (name == "amo") return std::make_unique<amo::Policy>();
   if (name == "asap") return std::make_unique<asap::Policy>();
   if (name == "bfm_zero") return std::make_unique<bfm_zero::Policy>();
@@ -769,6 +865,7 @@ std::unique_ptr<policy_api::Policy> make_policy(const std::string& name) {
   if (name == "josabb") return std::make_unique<josabb::Policy>();
   if (name == "legged_rl_lab") return std::make_unique<legged_rl_lab::Policy>();
   if (name == "mimic_lite") return std::make_unique<mimic_lite::Policy>();
+  if (name == "morphmimic") return std::make_unique<morphmimic::Policy>();
   if (name == "mturan33") return std::make_unique<mturan33::Policy>();
   if (name == "nanog1") return std::make_unique<nanog1::Policy>();
   if (name == "openwbt") return std::make_unique<openwbt::Policy>();
@@ -780,6 +877,8 @@ std::unique_ptr<policy_api::Policy> make_policy(const std::string& name) {
   if (name == "schoi") return std::make_unique<schoi::Policy>();
   if (name == "sonic") return std::make_unique<sonic::Policy>();
   if (name == "stepdown") return std::make_unique<stepdown::Policy>();
+  if (name == "supermimic_breezewrf")
+    return std::make_unique<supermimic_breezewrf::Policy>();
   if (name == "sunny") return std::make_unique<sunny::Policy>();
   if (name == "wbc_agile") return std::make_unique<wbc_agile::Policy>();
   if (name == "wbc_agile_velocity")
@@ -790,16 +889,17 @@ std::unique_ptr<policy_api::Policy> make_policy(const std::string& name) {
   if (name == "zealot_v26") return std::make_unique<zealot::V26Policy>();
 
   std::string msg = "unknown policy '" + name + "'. Ported: ";
-  for (size_t i = 0; i < std::size(NAMES); ++i) {
+  const std::vector<std::string> all = policy_names();
+  for (size_t i = 0; i < all.size(); ++i) {
     if (i) msg += ", ";
-    msg += NAMES[i];
+    msg += all[i];
   }
   throw std::runtime_error(msg);
 }
 
 namespace {
 
-constexpr double WALK_S = 90.0;
+constexpr double WALK_S = 180.0;
 constexpr int WAYPOINTS = 18;
 constexpr double POINT_S = WALK_S / WAYPOINTS;
 constexpr double CENTRE_X_M = 0.3;
@@ -832,7 +932,7 @@ const double STANCE[NUM_MOTOR] = {-0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
 constexpr double FORCE_MAX_N = 500.0;
 constexpr double FORCE_SCALE_MIN = 0.5;
 constexpr double RAMP_FLOOR = 1.0 / 3.0;
-constexpr double RAMP_S = 60.0;
+constexpr double RAMP_S = 120.0;
 constexpr double PUNCH_DELAY_S = 0.1;
 constexpr double PUNCH_DURATION_S = 0.08;
 
@@ -849,6 +949,7 @@ constexpr double PUNCH_ARROW_SCALE = 2.0;
 constexpr char FLOOR_FONT[] = "assets/JetBrainsMono.ttf";
 constexpr char FLOOR_TEXTURE[] = "floor_label";
 constexpr double FLOOR_EM_FRACTION = 0.072;
+constexpr size_t FLOOR_MAX_CHARS = 18;
 constexpr double FLOOR_TRACKING_EM = 0.18;
 constexpr double FLOOR_LINE_EM = 1.35;
 constexpr double FLOOR_MID_EM = 0.72;
@@ -1233,7 +1334,11 @@ void paint_floor_text(
     throw std::runtime_error(std::string("floor: cannot read ") + FLOOR_FONT);
   }
 
-  const double em_px = FLOOR_EM_FRACTION * width;
+  size_t longest = 0;
+  for (const std::string& line : lines)
+    longest = std::max(longest, line.size());
+  const double em_px = FLOOR_EM_FRACTION * width *
+                       std::min(1.0, double(FLOOR_MAX_CHARS) / double(longest));
   const double tracking_px = FLOOR_TRACKING_EM * em_px;
   FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(em_px));
 
@@ -1310,6 +1415,20 @@ void paint_floor_text(
 
   FT_Done_Face(face);
   FT_Done_FreeType(library);
+}
+
+std::vector<std::string> floor_name_lines(const std::string& name) {
+  if (name.size() <= FLOOR_MAX_CHARS) return {name};
+  size_t cut = std::string::npos;
+  for (size_t i = name.find('_'); i != std::string::npos;
+       i = name.find('_', i + 1)) {
+    const auto off = [&](size_t k) {
+      return std::abs(2 * double(k) - double(name.size()));
+    };
+    if (cut == std::string::npos || off(i) < off(cut)) cut = i;
+  }
+  if (cut == std::string::npos) return {name};
+  return {name.substr(0, cut), name.substr(cut + 1)};
 }
 
 void paint_floor_texture(
@@ -1841,6 +1960,19 @@ int run(
       break;
   }
 
+  policy_api::tour = mode == Mode::kTour;
+  policy_api::make_ghost = [&](int n, const policy_api::Policy& driver) {
+    std::unique_ptr<Physics> ghost = physics_make_mjwarp(graph_path, n);
+    float gkp[NUM_MOTOR], gkd[NUM_MOTOR];
+    for (int i = 0; i < NUM_MOTOR; ++i) {
+      const bool own = i < driver.owned();
+      gkp[i] = own ? driver.kp()[i] : float(ARMATURE[i] * WN * WN);
+      gkd[i] = own ? driver.kd()[i] : float(2.0 * ZETA * ARMATURE[i] * WN);
+    }
+    ghost->set_gains(gkp, gkd);
+    ghost->reset(STANCE, 0.793);
+    return ghost;
+  };
   std::unique_ptr<policy_api::Policy> pol = make_policy(policy_name);
   pol->init(envs);
   if (plan_only) return 0;
@@ -1873,10 +2005,11 @@ int run(
   phys->set_gains(crane_kp, crane_kd);
   bool gains_released = false;
 
-  float *d_cmd, *d_arm_pose, *d_task, *d_base_quat;
+  float *d_cmd, *d_arm_pose, *d_task, *d_base_quat, *d_base_pos;
   cudaMalloc(&d_cmd, size_t(envs) * 3 * sizeof(float));
   cudaMalloc(&d_task, size_t(envs) * 4 * sizeof(float));
   cudaMalloc(&d_base_quat, size_t(envs) * 4 * sizeof(float));
+  cudaMalloc(&d_base_pos, size_t(envs) * 3 * sizeof(float));
   cudaMalloc(&d_arm_pose, size_t(envs) * NUM_MOTOR * sizeof(float));
 
   const ArmBounds arm_bounds = arm_bounds_make(model);
@@ -1932,10 +2065,11 @@ int run(
   std::unique_ptr<Preview> preview;
   std::unique_ptr<Recorder> recorder;
   if (preview_on || !record_dir.empty()) {
-    const std::vector<std::string> label = {
-        engine == PhysicsEngine::kMujoco ? "mujoco" : "physx",
-        policy_name
+    std::vector<std::string> label = {
+        engine == PhysicsEngine::kMujoco ? "mujoco" : "physx"
     };
+    for (const std::string& line : floor_name_lines(policy_name))
+      label.push_back(line);
     preview = preview_open(
         model,
         "assets/g1_29dof.xml",
@@ -1956,6 +2090,7 @@ int run(
   std::vector<float> h_cmd(size_t(envs) * 3, 0.0f);
   std::vector<float> h_task(size_t(envs) * 4, 0.0f);
   std::vector<float> h_quat(size_t(envs) * 4, 0.0f);
+  std::vector<float> h_pos(size_t(envs) * 3, 0.0f);
   std::vector<float> h_arm(size_t(envs) * NUM_MOTOR);
 
   double view_tx = 0.0, view_ty = 0.0, view_tyaw = 0.0;
@@ -2119,6 +2254,7 @@ int run(
         h_quat[size_t(e) * 4 + 1] = p[0];
         h_quat[size_t(e) * 4 + 2] = p[1];
         h_quat[size_t(e) * 4 + 3] = p[2];
+        for (int k = 0; k < 3; ++k) h_pos[size_t(e) * 3 + k] = p[4 + k];
 
         double cmd[3] = {0.0, 0.0, 0.0};
         if (elapsed >= 0.0 && r.alive) {
@@ -2244,6 +2380,7 @@ int run(
       upload_floats(h_cmd, d_cmd);
       upload_floats(h_task, d_task);
       upload_floats(h_quat, d_base_quat);
+      upload_floats(h_pos, d_base_pos);
       upload_floats(h_arm, d_arm_pose);
       t_host += secs(host_a, tick());
 
@@ -2263,6 +2400,7 @@ int run(
             d_task,
             d_arm_pose,
             d_base_quat,
+            d_base_pos,
             phys->q_target()
         };
         pol->step(pctx);

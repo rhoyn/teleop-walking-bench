@@ -101,7 +101,7 @@ const float KDS[NUM_OWNED] = {
     KD_ANKLE
 };
 
-const policy_api::Limits LIMITS = {-0.6, 0.6, 0.4, 1.0, 0.6};
+const policy_api::Limits LIMITS = {-0.3, 0.3, 0.2, 0.5, 0.3};
 
 __device__ inline void q_mul(
     const float* a,
@@ -555,6 +555,135 @@ __global__ void k_mimic_lite_act(
   }
 }
 
+enum Reference { REF_SONIC = 0, REF_OPENWBT = 1, REF_GR00T = 2 };
+constexpr int REFERENCES[] = {REF_SONIC, REF_OPENWBT, REF_GR00T};
+
+constexpr int GHOST_LEAD = 15;
+constexpr double GHOST_FLOOR_M = 0.72;
+constexpr double GHOST_SPRING_K = 400.0;
+constexpr double GHOST_SPRING_D = 40.0;
+
+__global__ void k_mimic_lite_ghost_record(
+    const float* __restrict__ motor_q,
+    const float* __restrict__ pose,
+    float* __restrict__ motion,
+    int* __restrict__ len,
+    int* __restrict__ cursor,
+    int envs
+) {
+  const int env = blockIdx.x * blockDim.x + threadIdx.x;
+  if (env >= envs) return;
+
+  float* m = motion + size_t(env) * MAX_FRAMES * FRAME;
+  int n = len[env];
+  if (n == MAX_FRAMES) {
+    const int drop = cursor[env] > 1 ? cursor[env] - 1 : 1;
+    for (int i = 0; i < (n - drop) * FRAME; ++i) m[i] = m[i + drop * FRAME];
+    n -= drop;
+    cursor[env] = cursor[env] > drop ? cursor[env] - drop : 0;
+  }
+  const float* p = pose + size_t(env) * 7;
+  float* o = m + size_t(n) * FRAME;
+  for (int k = 0; k < 3; ++k) o[F_POS + k] = p[4 + k];
+  o[F_QUAT + 0] = p[3];
+  o[F_QUAT + 1] = p[0];
+  o[F_QUAT + 2] = p[1];
+  o[F_QUAT + 3] = p[2];
+  const float* q = motor_q + env * POLICY_NUM_MOTOR;
+  for (int j = 0; j < NUM_ACTIONS; ++j) o[F_Q + j] = q[D_MJ_OF_IL[j]];
+  len[env] = n + 1;
+}
+
+struct Ghost {
+  int source = REF_SONIC;
+  int envs = 0, per = 0;
+  std::unique_ptr<policy_api::Policy> driver;
+  std::unique_ptr<Physics> phys;
+  float* d_pose = nullptr;
+
+  ~Ghost() {
+    if (d_pose) cudaFree(d_pose);
+  }
+
+  void init(
+      int n,
+      int src
+  ) {
+    source = src;
+    envs = n;
+    driver = src == REF_OPENWBT ? std::make_unique<openwbt::Policy>()
+                                : gr00t_wbc::make("gr00t_wbc_h074_p000");
+    driver->init(n);
+    phys = policy_api::make_ghost(n, *driver);
+    per = std::max(1, int(std::lround(CONTROL_DT / phys->timestep())));
+    cudaMalloc(&d_pose, size_t(n) * 7 * sizeof(float));
+  }
+
+  void tick(
+      const policy_api::Ctx& c,
+      float* motion,
+      int* len,
+      int* cursor
+  ) {
+    const int threads = 128, blocks = (envs + threads - 1) / threads;
+    phys->read();
+    cudaMemcpy(
+        d_pose,
+        phys->base_pose(),
+        size_t(envs) * 7 * sizeof(float),
+        cudaMemcpyHostToDevice
+    );
+    k_mimic_lite_ghost_record<<<blocks, threads>>>(
+        phys->motor_q(),
+        d_pose,
+        motion,
+        len,
+        cursor,
+        envs
+    );
+    const policy_api::Ctx g{
+        phys->motor_q(),
+        phys->motor_dq(),
+        phys->gyro(),
+        phys->base_lin_vel(),
+        phys->gravity(),
+        c.cmd,
+        c.task,
+        c.arm_pose,
+        c.base_quat,
+        c.base_pos,
+        phys->q_target()
+    };
+    driver->step(g);
+    phys->apply_targets();
+    for (int s = 0; s < per; ++s) {
+      phys->support_base(GHOST_FLOOR_M, GHOST_SPRING_K, GHOST_SPRING_D);
+      phys->step(1);
+    }
+  }
+
+  void advance(
+      const policy_api::Ctx& c,
+      long long ticks,
+      float* motion,
+      int* len,
+      int* cursor
+  ) {
+    for (int k = ticks == 0 ? GHOST_LEAD + 1 : 1; k > 0; --k)
+      tick(c, motion, len, cursor);
+  }
+};
+
+inline const char* reference_suffix(int ref) {
+  return ref == REF_OPENWBT ? "_openwbtplnr"
+         : ref == REF_GR00T ? "_gr00twbcplnr"
+                            : "_sonicplnr";
+}
+
+inline policy_api::Limits reference_limits(int ref) {
+  return ref == REF_SONIC ? LIMITS : openwbt::LIMITS;
+}
+
 struct Policy : policy_api::Policy {
   std::shared_ptr<policy_api::Engine> planner, actor;
 
@@ -575,6 +704,9 @@ struct Policy : policy_api::Policy {
   float *d_stp = nullptr, *d_sth = nullptr, *d_allow = nullptr;
 
   long long ticks = 0;
+  int ref = mimic_lite::REF_SONIC;
+  mimic_lite::Ghost ghost;
+  std::string full_name;
   int envs = 0;
 
   ~Policy() override {
@@ -613,22 +745,24 @@ struct Policy : policy_api::Policy {
   void init(int n) override {
     envs = n;
 
-    planner = policy_api::engine_make(
-        "policies/sonic/planner_sonic_rows.onnx",
-        n,
-        {{"context_mujoco_qpos", {-1, CTX_FRAMES, QPOS}},
-         {"mode", {-1}},
-         {"target_vel", {-1}},
-         {"movement_direction", {-1, 3}},
-         {"facing_direction", {-1, 3}},
-         {"random_seed", {-1}},
-         {"height", {-1}},
-         {"has_specific_target", {-1, 1}},
-         {"specific_target_positions", {-1, CTX_FRAMES, 3}},
-         {"specific_target_headings", {-1, CTX_FRAMES}},
-         {"allowed_pred_num_tokens", {-1, 11}}},
-        {{"mujoco_qpos", {-1, PLAN_FRAMES, QPOS}}, {"num_pred_frames", {-1}}}
-    );
+    if (ref != mimic_lite::REF_SONIC) ghost.init(n, ref);
+    if (ref == mimic_lite::REF_SONIC)
+      planner = policy_api::engine_make(
+          "policies/sonic/model_planner_rows.onnx",
+          n,
+          {{"context_mujoco_qpos", {-1, CTX_FRAMES, QPOS}},
+           {"mode", {-1}},
+           {"target_vel", {-1}},
+           {"movement_direction", {-1, 3}},
+           {"facing_direction", {-1, 3}},
+           {"random_seed", {-1}},
+           {"height", {-1}},
+           {"has_specific_target", {-1, 1}},
+           {"specific_target_positions", {-1, CTX_FRAMES, 3}},
+           {"specific_target_headings", {-1, CTX_FRAMES}},
+           {"allowed_pred_num_tokens", {-1, 11}}},
+          {{"mujoco_qpos", {-1, PLAN_FRAMES, QPOS}}, {"num_pred_frames", {-1}}}
+      );
 
     actor = policy_api::engine_make(
         "policies/mimic_lite/model.onnx",
@@ -703,44 +837,48 @@ struct Policy : policy_api::Policy {
   void step(const policy_api::Ctx& c) override {
     const int threads = 128, blocks = (envs + threads - 1) / threads;
 
-    k_mimic_lite_drive<<<blocks, threads>>>(
-        c.cmd,
-        c.base_quat,
-        d_psiref,
-        d_yaw0,
-        d_len,
-        d_mode,
-        d_vel,
-        d_move,
-        d_face,
-        envs
-    );
-
-    if (ticks % REPLAN_TICKS == 0) {
-      k_mimic_lite_context<<<blocks, threads>>>(
-          d_motion,
-          d_len,
-          d_cursor,
-          c.motor_q,
-          d_ctx,
-          envs
-      );
-      plan();
-      k_mimic_lite_apply<<<blocks, threads>>>(
+    if (ref != mimic_lite::REF_SONIC) {
+      ghost.advance(c, ticks, d_motion, d_len, d_cursor);
+    } else {
+      k_mimic_lite_drive<<<blocks, threads>>>(
+          c.cmd,
           c.base_quat,
-          d_qpos,
-          d_nframes,
-          d_gen,
-          d_motion,
-          d_motion2,
-          d_len,
-          d_cursor,
           d_psiref,
           d_yaw0,
-          d_yaw_off,
+          d_len,
+          d_mode,
+          d_vel,
+          d_move,
+          d_face,
           envs
       );
-      std::swap(d_motion, d_motion2);
+
+      if (ticks % REPLAN_TICKS == 0) {
+        k_mimic_lite_context<<<blocks, threads>>>(
+            d_motion,
+            d_len,
+            d_cursor,
+            c.motor_q,
+            d_ctx,
+            envs
+        );
+        plan();
+        k_mimic_lite_apply<<<blocks, threads>>>(
+            c.base_quat,
+            d_qpos,
+            d_nframes,
+            d_gen,
+            d_motion,
+            d_motion2,
+            d_len,
+            d_cursor,
+            d_psiref,
+            d_yaw0,
+            d_yaw_off,
+            envs
+        );
+        std::swap(d_motion, d_motion2);
+      }
     }
 
     k_mimic_lite_past<<<blocks, threads>>>(
@@ -804,8 +942,17 @@ struct Policy : policy_api::Policy {
   const float* kp() const override { return KPS; }
   const float* kd() const override { return KDS; }
   int owned() const override { return NUM_OWNED; }
-  policy_api::Limits limits() const override { return LIMITS; }
-  const char* name() const override { return "mimic_lite"; }
+  policy_api::Limits limits() const override {
+    return mimic_lite::reference_limits(ref);
+  }
+  bool set_reference(int r) override {
+    ref = r;
+    full_name = std::string("mimic_lite") + mimic_lite::reference_suffix(r);
+    return true;
+  }
+  const char* name() const override {
+    return full_name.empty() ? "mimic_lite" : full_name.c_str();
+  }
 };
 
 }

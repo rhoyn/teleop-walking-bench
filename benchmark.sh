@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 usage() {
-  echo "usage: $0 [--benchmark tour|rotate|direction]" >&2
+  echo "usage: $0 [--benchmark tour|rotate|direction|all]" >&2
   exit 2
 }
 MODE=tour
@@ -15,18 +15,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$MODE" in
-  tour | rotate | direction) ;;
+  tour | rotate | direction | all) ;;
   *) usage ;;
 esac
 
+if [ "$MODE" = all ]; then
+  for m in tour rotate direction; do "$0" --benchmark "$m"; done
+  exit
+fi
+
 if [ "$MODE" = tour ]; then
   RUNS=${RUNS:-512}
-  ROUNDS=${ROUNDS:-10}
+  ROUNDS=${ROUNDS:-5}
   BASE=punches
+  PREFIX=p
 else
   RUNS=${RUNS:-1024}
   ROUNDS=${ROUNDS:-4}
   BASE=$MODE
+  PREFIX=${MODE:0:1}
 fi
 LEG_GAINS="1.0 1.5 2.0"
 GAIN_RUNS=${GAIN_RUNS:-1024}
@@ -41,12 +48,19 @@ CORESEQ=$(mktemp -t benchmark-core.XXXXXX)
 echo 0 >"$CORESEQ"
 GPUDIR=$(mktemp -d -t benchmark-gpu.XXXXXX)
 GPUSLOTS=$(((JOBS + NGPUS - 1) / NGPUS))
-export MODE BASE RUNS GAIN_RUNS CPUS NICE NCORES CORESEQ NGPUS GPUDIR GPUSLOTS
+export MODE BASE PREFIX RUNS GAIN_RUNS CPUS NICE NCORES CORESEQ NGPUS GPUDIR GPUSLOTS
 
 ONLY=${POLICIES:-}
 POLICIES=$(for d in policies/*/; do [ -f "$d/policy.cpp" ] && basename "$d"; done |
-  grep -vE '^(decoupled_wbc|gr00t_wbc)$')
+  grep -vE '^(decoupled_wbc|gr00t_wbc|mimic_lite|morphmimic|supermimic|supermimic_breezewrf|supermimic_vibed)$')
 POLICIES="$POLICIES clobot_with_arms handoff_with_arms"
+TRACKERS="mimic_lite morphmimic supermimic_breezewrf"
+for v in kangzejian kyrieyoung rayzhao dyn m5 panhainan omegai; do
+  TRACKERS="$TRACKERS supermimic_$v"
+done
+for t in $TRACKERS; do
+  POLICIES="$POLICIES ${t}_sonicplnr ${t}_openwbtplnr ${t}_gr00twbcplnr"
+done
 for h in h074_p000 h070_p000 h066_p000 h066_p012; do
   POLICIES="$POLICIES gr00t_wbc_$h decoupled_wbc_$h"
 done
@@ -63,21 +77,21 @@ decoupled_wbc_h074_p000
 homie
 wbc_agile_velocity
 amo
+morphmimic_sonicplnr
+morphmimic_gr00twbcplnr
 '
 
 RUN='
-  TIER=$0
-  ROUND=$1
-  P=$2
-  ENGINE=$3
-  G=$4
+  ROUND=$0
+  P=$1
+  ENGINE=$2
+  G=$3
   DIR=results/${BASE}_gainx$G
-  R=$(printf "r%02d" "$ROUND")
+  R=$(printf "%s%02d" "$PREFIX" "$ROUND")
   n=$RUNS
   [ "$G" = 1.0 ] || n=$GAIN_RUNS
   f=$((ROUND * n))
-  out=$TIER.$R.$P.$ENGINE
-  [ "$MODE" = tour ] || out=$R.$P.$ENGINE
+  out=$R.$P.$ENGINE
   log=$out.gainx$G
   CORE=$(
     exec 9>"$CORESEQ.lock"
@@ -141,19 +155,17 @@ trap 'kill $MON 2>/dev/null || true; rm -rf "$CORESEQ" "$CORESEQ.lock" "$GPUDIR"
 for r in $(seq 0 $((ROUNDS - 1))); do
   for p in ${ONLY:-$POLICIES}; do
     for g in $LEG_GAINS; do
-      tier=tier_b
       rounds=1
-      [ "$MODE" = tour ] && echo "$TIER_A" | grep -qxF "$p" && tier=tier_a
-      [ "$tier" = tier_a ] && [ "$g" = 1.0 ] && rounds=$ROUNDS
+      [ "$MODE" = tour ] && [ "$g" = 1.0 ] && echo "$TIER_A" | grep -qxF "$p" &&
+        rounds=$ROUNDS
       [ "$MODE" = tour ] || rounds=$ROUNDS
       [ "$r" -lt "$rounds" ] || continue
       dir=results/${BASE}_gainx$g
-      name=$tier.$(printf "r%02d" "$r").$p
-      [ "$MODE" = tour ] || name=$(printf "r%02d" "$r").$p
+      name=$(printf "%s%02d" "$PREFIX" "$r").$p
       for e in mujoco physx; do
         [ -s "$dir/$name.$e.csv" ] && continue
-        echo "$tier $r $p $e $g"
+        echo "$r $p $e $g"
       done
     done
   done
-done | xargs -P "$JOBS" -n 5 bash -c "$RUN"
+done | xargs -r -P "$JOBS" -n 4 bash -c "$RUN"

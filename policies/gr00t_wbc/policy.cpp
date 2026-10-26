@@ -33,7 +33,7 @@ const float KPS[NUM_ACTIONS] =
     {150, 150, 150, 200, 40, 40, 150, 150, 150, 200, 40, 40, 250, 250, 250};
 const float KDS[NUM_ACTIONS] = {2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2, 5, 5, 5};
 
-const policy_api::Limits LIMITS = {-0.5, 0.5, 0.5, 1.0, 0.5};
+const policy_api::Limits LIMITS = {-0.3, 0.3, 0.3, 0.5, 0.3};
 
 __global__ void k_gr00t_wbc_obs(
     const float* __restrict__ motor_q,
@@ -105,6 +105,7 @@ struct Policy : policy_api::Policy {
   std::shared_ptr<policy_api::Engine> walk, balance;
   float *d_obs = nullptr, *d_walk = nullptr, *d_balance = nullptr;
   float *d_last = nullptr, *d_defaults = nullptr;
+  policy_api::CmdRamp ramp;
   int envs = 0;
   const Variant variant;
 
@@ -143,16 +144,18 @@ struct Policy : policy_api::Policy {
     cudaMemset(d_last, 0, size_t(n) * NUM_ACTIONS * sizeof(float));
     cudaMalloc(&d_defaults, NUM_ACTIONS * sizeof(float));
     cudaMemcpy(d_defaults, DEFAULTS, sizeof(DEFAULTS), cudaMemcpyHostToDevice);
+    ramp.init(n);
   }
 
   void step(const policy_api::Ctx& c) override {
     const int threads = 128, blocks = (envs + threads - 1) / threads;
+    const float* cmd = ramp.apply(c.cmd, envs);
     k_gr00t_wbc_obs<<<blocks, threads>>>(
         c.motor_q,
         c.motor_dq,
         c.gyro,
         c.gravity,
-        c.cmd,
+        cmd,
         d_last,
         d_obs,
         variant.height,
@@ -164,7 +167,7 @@ struct Policy : policy_api::Policy {
     k_gr00t_wbc_act<<<blocks, threads>>>(
         d_walk,
         d_balance,
-        c.cmd,
+        cmd,
         c.arm_pose,
         d_last,
         c.q_target,

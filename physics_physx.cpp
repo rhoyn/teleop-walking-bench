@@ -2,6 +2,8 @@
 
 #include "physics.h"
 
+#include <cuda.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -291,7 +293,16 @@ std::unique_ptr<Sim> sim_make() {
   if (sim->foundation == nullptr)
     throw std::runtime_error("physx: cannot create the foundation");
 
+  // Share the CUDA runtime's primary context instead of letting PhysX create
+  // its own. TensorRT, the policies and MuJoCo Warp (a ghost world beside a
+  // PhysX run) all work in the primary context, and buffers from one context
+  // are invalid in another.
+  static CUcontext primary = nullptr;
+  cudaFree(nullptr);
+  if (cuCtxGetCurrent(&primary) != CUDA_SUCCESS || primary == nullptr)
+    throw std::runtime_error("physx: no current CUDA context to share");
   PxCudaContextManagerDesc cuda_desc;
+  cuda_desc.ctx = &primary;
   sim->cuda = PxCreateCudaContextManager(*sim->foundation, cuda_desc);
   if (sim->cuda == nullptr || !sim->cuda->contextIsValid()) {
     throw std::runtime_error("physx: no usable CUDA device");
@@ -1669,6 +1680,14 @@ class PhysxPhysics : public Physics {
 
   void hold_base(double height) override {
     world::world_hold_base(*world_, height);
+  }
+
+  void support_base(
+      double,
+      double,
+      double
+  ) override {
+    throw std::runtime_error("physx: support_base is not implemented");
   }
 
   void read() override {

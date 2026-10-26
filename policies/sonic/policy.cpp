@@ -80,7 +80,7 @@ const float KPS[NUM_OWNED] = {SONIC_OWNED_LIST(kp_of)};
 const float KDS[NUM_OWNED] = {SONIC_OWNED_LIST(kd_of)};
 __device__ const float D_SCALE[NUM_OWNED] = {SONIC_OWNED_LIST(scale_of)};
 
-const policy_api::Limits LIMITS = {-0.6, 0.6, 0.4, 1.0, 0.6};
+const policy_api::Limits LIMITS = {-0.3, 0.3, 0.2, 0.5, 0.3};
 
 __device__ inline void q_mul(
     const float* a,
@@ -612,7 +612,7 @@ struct Policy : policy_api::Policy {
     envs = n;
 
     planner = policy_api::engine_make(
-        "policies/sonic/planner_sonic_rows.onnx",
+        "policies/sonic/model_planner_rows.onnx",
         n,
         {{"context_mujoco_qpos", {-1, CTX_FRAMES, QPOS}},
          {"mode", {-1}},

@@ -171,6 +171,27 @@ __global__ void k_hold(
   for (int k = 0; k < 6; ++k) v[k] = 0.0f;
 }
 
+__global__ void k_support(
+    const float* qpos,
+    float* qvel,
+    int nworld,
+    int nq,
+    int nv,
+    int base_q,
+    int base_v,
+    float floor,
+    float stiffness,
+    float damping,
+    float dt
+) {
+  const int w = blockIdx.x * blockDim.x + threadIdx.x;
+  if (w >= nworld) return;
+  const float z = qpos[size_t(w) * nq + base_q + 2];
+  if (z >= floor) return;
+  float* vz = qvel + size_t(w) * nv + base_v + 2;
+  *vz += dt * (stiffness * (floor - z) - damping * *vz);
+}
+
 __global__ void k_reset(
     float* qpos,
     float* qvel,
@@ -530,6 +551,28 @@ class MjWarpPhysics : public Physics {
         float(height)
     );
     ck(cudaGetLastError(), "hold_base");
+  }
+
+  void support_base(
+      double floor,
+      double stiffness,
+      double damping
+  ) override {
+    const int blocks = (side_.nworld + 255) / 256;
+    k_support<<<blocks, 256>>>(
+        p_qpos_,
+        p_qvel_,
+        side_.nworld,
+        side_.nq,
+        side_.nv,
+        side_.base_q,
+        side_.base_v,
+        float(floor),
+        float(stiffness),
+        float(damping),
+        float(side_.timestep)
+    );
+    ck(cudaGetLastError(), "support_base");
   }
 
   void read() override {

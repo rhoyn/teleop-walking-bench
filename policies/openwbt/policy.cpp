@@ -46,7 +46,7 @@ const float KDS[FIRST_ARM] =
     {2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2, WAIST_KD, WAIST_KD, WAIST_KD};
 
 const policy_api::Limits LIMITS =
-    {-0.3, 0.3, 0.3, 0.3, 0.0, 0.05, 0.10, 0.05, 0.10, 2.0, 2.0};
+    {-0.3, 0.3, 0.3, 0.5, 0.3, 0.05, 0.10, 0.05, 0.10, 2.0, 2.0};
 
 __device__ inline float clip_obs(float v) {
   return fminf(fmaxf(v, -CLIP_OBS), CLIP_OBS);
@@ -133,6 +133,7 @@ __global__ void k_openwbt_act(
 struct Policy : policy_api::Policy {
   std::shared_ptr<policy_api::Engine> engine;
   float *d_obs = nullptr, *d_act = nullptr, *d_last = nullptr;
+  policy_api::CmdRamp ramp;
 
   float *d_h_in = nullptr, *d_h_out = nullptr;
   double* d_gait = nullptr;
@@ -165,6 +166,7 @@ struct Policy : policy_api::Policy {
     cudaMalloc(&d_act, size_t(n) * NUM_ACTIONS * sizeof(float));
     cudaMalloc(&d_last, size_t(n) * NUM_ACTIONS * sizeof(float));
     cudaMemset(d_last, 0, size_t(n) * NUM_ACTIONS * sizeof(float));
+    ramp.init(n);
 
     for (float** p : {&d_h_in, &d_h_out}) {
       cudaMalloc(p, size_t(n) * HIDDEN_DIM * sizeof(float));
@@ -188,7 +190,7 @@ struct Policy : policy_api::Policy {
         c.motor_dq,
         c.gyro,
         c.gravity,
-        c.cmd,
+        ramp.apply(c.cmd, envs),
         d_last,
         d_gait,
         d_obs,

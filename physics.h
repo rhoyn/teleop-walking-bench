@@ -32,6 +32,11 @@ class Physics {
       double height
   ) = 0;
   virtual void hold_base(double height) = 0;
+  virtual void support_base(
+      double floor,
+      double stiffness,
+      double damping
+  ) = 0;
 
   virtual void read() = 0;
 

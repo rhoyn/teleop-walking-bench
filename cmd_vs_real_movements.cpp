@@ -401,7 +401,9 @@ std::vector<fs::path> batches(
 ) {
   std::vector<fs::path> out;
   if (!fs::is_directory(folder)) return out;
-  const std::regex name("r[0-9][0-9]\\." + policy + "\\." + engine + "\\.csv");
+  const std::regex name(
+      "[rd][0-9][0-9]\\." + policy + "\\." + engine + "\\.csv"
+  );
   for (const auto& entry : fs::directory_iterator(folder)) {
     if (std::regex_match(entry.path().filename().string(), name)) {
       out.push_back(entry.path());
@@ -409,6 +411,45 @@ std::vector<fs::path> batches(
   }
   std::sort(out.begin(), out.end());
   return out;
+}
+
+std::string name_md(const std::string& name) {
+  std::vector<size_t> cuts;
+  for (const char* part :
+       {"_h0",
+        "_with",
+        "_velocity",
+        "_sonicplnr",
+        "_openwbtplnr",
+        "_gr00twbcplnr"}) {
+    const size_t p = name.find(part);
+    if (p != std::string::npos) cuts.push_back(p);
+  }
+  const std::string family = "supermimic_";
+  if (name.compare(0, family.size(), family) == 0)
+    cuts.push_back(family.size() - 1);
+  std::sort(cuts.begin(), cuts.end());
+  std::string md = "`";
+  size_t from = 0;
+  for (const size_t cut : cuts) {
+    if (cut <= from) continue;
+    md += name.substr(from, cut - from) + "`<br>`";
+    from = cut + 1;
+  }
+  return md + name.substr(from) + "`";
+}
+
+long run_ids(
+    const fs::path& folder,
+    const std::string& policy
+) {
+  long n = 0;
+  for (const fs::path& f : batches(folder, policy, "mujoco")) {
+    std::ifstream in(f);
+    std::string line;
+    for (std::getline(in, line); std::getline(in, line);) ++n;
+  }
+  return n;
 }
 
 Runs read_runs(const std::vector<fs::path>& paths) {
@@ -1122,7 +1163,7 @@ yaw_gaps(
 
 std::vector<std::string> discover(const fs::path& results) {
   std::set<std::string> found;
-  const std::regex name("r[0-9][0-9]\\.(.+)\\.(mujoco|physx)\\.csv");
+  const std::regex name("[rd][0-9][0-9]\\.(.+)\\.(mujoco|physx)\\.csv");
   for (const std::string& mode : MODES) {
     for (const std::string& gain : GAINS) {
       const fs::path folder = results / (mode + "_gainx" + gain);
@@ -1145,9 +1186,7 @@ std::map<
 punch_survival(const fs::path& folder) {
   std::map<std::string, std::pair<double, long>> sum;
   if (!fs::is_directory(folder)) return {};
-  const std::regex name(
-      "tier_[ab]\\.r[0-9][0-9]\\.(.+)\\.(mujoco|physx)\\.csv"
-  );
+  const std::regex name("p[0-9][0-9]\\.(.+)\\.(mujoco|physx)\\.csv");
   for (const auto& entry : fs::directory_iterator(folder)) {
     std::smatch m;
     const std::string file = entry.path().filename().string();
@@ -1320,7 +1359,7 @@ int main(
         fmt("%.3f", pr.drift.at("mujoco")) + " / " +
         fmt("%.3f", pr.drift.at("physx")) + " | " + pct(pr.turn_right) + " | " +
         fmt("%.2f", std::max(pr.turn_delivered, 0.0)) + " |\n";
-    table += "| " + std::to_string(i) + " | [`" + sc.policy + "`](" +
+    table += "| " + std::to_string(i) + " | [" + name_md(sc.policy) + "](" +
              (out / (prefix + sc.policy + ".png")).generic_string() + ")" +
              values;
     std::printf(
@@ -1341,7 +1380,7 @@ int main(
   std::string gap_table = "| policy | gap |\n|---|---:|\n";
   double gap_sum = 0.0;
   for (const auto& [gap, policy] : gaps) {
-    gap_table += "| `" + policy + "` | " + fmt("%.4f", gap) + " |\n";
+    gap_table += "| " + name_md(policy) + " | " + fmt("%.4f", gap) + " |\n";
     gap_sum += gap;
   }
   if (!gaps.empty()) {
@@ -1367,6 +1406,23 @@ int main(
       );
       return 1;
     }
+    std::map<long, std::vector<std::string>> by_runs;
+    for (const Score& s : scores)
+      by_runs[run_ids(results / "rotate_gainx1.0", s.policy)].push_back(
+          s.policy
+      );
+    long runs = 0;
+    size_t runs_n = 0;
+    for (const auto& [n, ps] : by_runs) {
+      if (ps.size() > runs_n) runs = n, runs_n = ps.size();
+    }
+    std::string fewer;
+    for (const auto& [n, ps] : by_runs) {
+      if (n == runs) continue;
+      for (const std::string& p : ps)
+        fewer += (fewer.empty() ? "" : ", ") + ("`" + p + "`");
+      fewer += ": " + std::to_string(n);
+    }
     double gap_mean = 0.0;
     for (const auto& g : gaps) gap_mean += g.first / double(gaps.size());
     std::string best;
@@ -1382,11 +1438,11 @@ int main(
       for (size_t k = 0; k < order.size(); ++k) {
         if (order[k].second != top.policy) continue;
         punches = "In the punch tour above it survives " +
-                  fmt("%.1f", -order[k].first) + " s on average, " +
+                  fmt("%.0f", -order[k].first) + " s on average, " +
                   std::to_string(k + 1) + " of " +
                   std::to_string(order.size()) + " (the best, `" +
                   order.front().second + "`, " +
-                  fmt("%.1f", -order.front().first) + " s).";
+                  fmt("%.0f", -order.front().first) + " s).";
       }
       const Precision& pr = top.pr;
       best = "![" + top.policy + "](" + chart.generic_string() + ")\n\n`" +
@@ -1409,7 +1465,10 @@ int main(
         "uniformly per run id up to 1 rad/s and 1 m/s. "
         "`./benchmark.sh --benchmark rotate|direction` runs every policy at "
         "legs "
-        "KP/KD x1.0, x1.5 and x2.0 for 4096 run ids each into "
+        "KP/KD x1.0, x1.5 and x2.0 for " +
+        std::to_string(runs) + " run ids each" +
+        (fewer.empty() ? "" : " (" + fewer + ")") +
+        " into "
         "`results/<mode>_gainx<G>/`, and `build/cmd_vs_real_movements` charts "
         "measured against commanded speed into `" +
         out.generic_string() + "/`. " + metrics +

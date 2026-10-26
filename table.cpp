@@ -219,10 +219,29 @@ std::string per_step(
 }
 
 std::string name_md(const std::string& name) {
-  size_t p = name.find("_h0");
-  if (p == std::string::npos) p = name.find("_with");
-  if (p == std::string::npos) return "`" + name + "`";
-  return "`" + name.substr(0, p) + "`<br>`" + name.substr(p + 1) + "`";
+  std::vector<size_t> cuts;
+  for (const char* part :
+       {"_h0",
+        "_with",
+        "_velocity",
+        "_sonicplnr",
+        "_openwbtplnr",
+        "_gr00twbcplnr"}) {
+    const size_t p = name.find(part);
+    if (p != std::string::npos) cuts.push_back(p);
+  }
+  const std::string family = "supermimic_";
+  if (name.compare(0, family.size(), family) == 0)
+    cuts.push_back(family.size() - 1);
+  std::sort(cuts.begin(), cuts.end());
+  std::string md = "`";
+  size_t from = 0;
+  for (const size_t cut : cuts) {
+    if (cut <= from) continue;
+    md += name.substr(from, cut - from) + "`<br>`";
+    from = cut + 1;
+  }
+  return md + name.substr(from) + "`";
 }
 
 std::map<
@@ -434,7 +453,7 @@ std::string both(const Totals& t) {
 }
 
 std::string survival_cell(const Totals& t) {
-  return per_engine(t.survival_mj, t.runs_mj, t.survival_px, t.runs_px, 1, "");
+  return per_engine(t.survival_mj, t.runs_mj, t.survival_px, t.runs_px, 0, "");
 }
 
 std::string runs_cell(const Totals& t) {
@@ -508,7 +527,7 @@ int main(
     if (totals.empty()) throw std::runtime_error("table: no runs to pool");
 
     std::cout << "| `--policy` | mean<br>survival<br>sec<br>mujoco<br>physx "
-                 "| completed<br>percent<br>mujoco<br>physx | runs "
+                 "| compl-<br>eted<br>percent<br>mujoco<br>physx | runs "
                  "| pos<br>err<br>cm<br>mujoco<br>physx | yaw<br>err<br>"
                  "deg<br>mujoco<br>physx "
                  "| walk<br>energy<br>KJ<br>mujoco<br>physx "
