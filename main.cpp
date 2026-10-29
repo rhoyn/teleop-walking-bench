@@ -717,7 +717,7 @@ void engine_run(
 #include "policies/asap/policy.cpp"
 #include "policies/bfm_zero/policy.cpp"
 #include "policies/clobot/policy.cpp"
-#include "policies/decoupled_wbc/policy.cpp"
+#include "policies/htd_wbc/policy.cpp"
 #include "policies/dm_agile/policy.cpp"
 #include "policies/dm_march/policy.cpp"
 #include "policies/falcon/policy.cpp"
@@ -796,8 +796,8 @@ std::vector<std::string> policy_names() {
   std::vector<std::string> names(std::begin(NAMES), std::end(NAMES));
   const std::vector<std::string> gr00t = gr00t_wbc::names();
   names.insert(names.begin(), gr00t.begin(), gr00t.end());
-  const std::vector<std::string> decoupled = decoupled_wbc::names();
-  names.insert(names.end(), decoupled.begin(), decoupled.end());
+  const std::vector<std::string> htd = htd_wbc::names();
+  names.insert(names.end(), htd.begin(), htd.end());
   const std::vector<std::string> vibed = supermimic_vibed::names();
   const std::vector<std::string> sm = supermimic::names();
 
@@ -843,7 +843,7 @@ std::unique_ptr<policy_api::Policy> make_policy(const std::string& name) {
 
 std::unique_ptr<policy_api::Policy> make_base_policy(const std::string& name) {
   if (auto gr00t = gr00t_wbc::make(name)) return gr00t;
-  if (auto dec = decoupled_wbc::make(name)) return dec;
+  if (auto dec = htd_wbc::make(name)) return dec;
   if (auto vibed = supermimic_vibed::make(name)) return vibed;
   if (auto sm = supermimic::make(name)) return sm;
   if (name == "amo") return std::make_unique<amo::Policy>();

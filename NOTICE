@@ -151,10 +151,6 @@ refuses a download that does not match it.
     latents.csv is the twelve latents this policy commands by name, each read
     out of that pickle and written one per row
 
-  decoupled_wbc  policies/decoupled_wbc/model.onnx  6329  BSD-3-Clause  committed
-    chrisyrniu/IsaacLab-Decoupled-WBC
-    https://github.com/chrisyrniu/IsaacLab-Decoupled-WBC
-
   dm_agile  policies/dm_agile/model.onnx  94a9  NONE DECLARED  ./download_export_onnx.sh
     datamentorshf/dm-g1-agile-locomotion-rl, exported/policy.onnx
     https://huggingface.co/datamentorshf/dm-g1-agile-locomotion-rl
@@ -172,6 +168,13 @@ refuses a download that does not match it.
   handoff  policies/handoff/model.onnx  0c0f  NONE DECLARED  ./download_export_onnx.sh
     lzyang2000/HANDOFF, deploy/ckpt/policy.onnx
     https://github.com/lzyang2000/HANDOFF
+
+  htd_wbc  policies/htd_wbc/model.onnx  6329  BSD-3-Clause  committed
+    chrisyrniu/IsaacLab-Decoupled-WBC
+    https://github.com/chrisyrniu/IsaacLab-Decoupled-WBC
+    the whole-body controller of Humanoid Touch Dream (HTD), named after it
+    at its authors' request; listed as decoupled_wbc before
+    https://humanoid-touch-dream.github.io/
 
   legged_rl_lab  policies/legged_rl_lab/model.onnx  2667  NONE DECLARED  ./download_export_onnx.sh
     zihanwang0422/legged_rl_lab, deploy/g1_deploy/exported_policy/g1_flat_1.onnx

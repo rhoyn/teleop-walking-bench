@@ -52,7 +52,7 @@ export MODE BASE PREFIX RUNS GAIN_RUNS CPUS NICE NCORES CORESEQ NGPUS GPUDIR GPU
 
 ONLY=${POLICIES:-}
 POLICIES=$(for d in policies/*/; do [ -f "$d/policy.cpp" ] && basename "$d"; done |
-  grep -vE '^(decoupled_wbc|gr00t_wbc|mimic_lite|morphmimic|supermimic|supermimic_breezewrf|supermimic_vibed)$')
+  grep -vE '^(htd_wbc|gr00t_wbc|mimic_lite|morphmimic|supermimic|supermimic_breezewrf|supermimic_vibed)$')
 POLICIES="$POLICIES clobot_with_arms handoff_with_arms"
 TRACKERS="mimic_lite morphmimic supermimic_breezewrf"
 for v in kangzejian kyrieyoung rayzhao dyn m5 panhainan omegai; do
@@ -62,7 +62,7 @@ for t in $TRACKERS; do
   POLICIES="$POLICIES ${t}_sonicplnr ${t}_openwbtplnr ${t}_gr00twbcplnr"
 done
 for h in h074_p000 h070_p000 h066_p000 h066_p012; do
-  POLICIES="$POLICIES gr00t_wbc_$h decoupled_wbc_$h"
+  POLICIES="$POLICIES gr00t_wbc_$h htd_wbc_$h"
 done
 
 TIER_A='
@@ -70,10 +70,10 @@ gr00t_wbc_h066_p012
 gr00t_wbc_h066_p000
 gr00t_wbc_h070_p000
 gr00t_wbc_h074_p000
-decoupled_wbc_h066_p000
-decoupled_wbc_h066_p012
-decoupled_wbc_h070_p000
-decoupled_wbc_h074_p000
+htd_wbc_h066_p000
+htd_wbc_h066_p012
+htd_wbc_h070_p000
+htd_wbc_h074_p000
 homie
 wbc_agile_velocity
 amo

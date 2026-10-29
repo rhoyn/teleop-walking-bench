@@ -71,11 +71,11 @@ the touchdowns of completed runs. Per-segment values are in each CSV as
 | `--policy` | mean<br>survival<br>sec<br>mujoco<br>physx | compl-<br>eted<br>percent<br>mujoco<br>physx | runs | pos<br>err<br>cm<br>mujoco<br>physx | yaw<br>err<br>deg<br>mujoco<br>physx | walk<br>energy<br>KJ<br>mujoco<br>physx | walk<br>vibrations<br>mujoco<br>physx | stomp<br>energy<br>J<br>mujoco<br>physx |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `gr00t_wbc`<br>`h070_p000` | **172/173** | 83/84 | 2560 | 14/27 | 5/6 | 7.9/9.2 | 1.1/1.7 | 1.2/0.8 |
-| `decoupled_wbc`<br>`h066_p012` | **174/171** | 86/81 | 2560 | 7/15 | 10/9 | 6.1/13.1 | 1.4/4.0 | 1.6/0.9 |
-| `decoupled_wbc`<br>`h066_p000` | **173/169** | 84/79 | 2560 | 8/19 | 10/6 | 6.1/15.5 | 1.5/4.7 | 1.6/0.8 |
-| `decoupled_wbc`<br>`h070_p000` | **172/170** | 83/79 | 2560 | 8/12 | 14/12 | 6.0/13.1 | 1.4/3.7 | 1.7/1.2 |
+| `htd_wbc`<br>`h066_p012` | **174/171** | 86/81 | 2560 | 7/15 | 10/9 | 6.1/13.1 | 1.4/4.0 | 1.6/0.9 |
+| `htd_wbc`<br>`h066_p000` | **173/169** | 84/79 | 2560 | 8/19 | 10/6 | 6.1/15.5 | 1.5/4.7 | 1.6/0.8 |
+| `htd_wbc`<br>`h070_p000` | **172/170** | 83/79 | 2560 | 8/12 | 14/12 | 6.0/13.1 | 1.4/3.7 | 1.7/1.2 |
 | `gr00t_wbc`<br>`h066_p012` | **174/166** | 88/74 | 2560 | 25/122 | 17/12 | 7.6/9.8 | 0.9/1.7 | 1.0/0.3 |
-| `decoupled_wbc`<br>`h074_p000` | **170/169** | 79/77 | 2560 | 12/10 | 21/13 | 6.0/13.7 | 1.4/3.7 | 1.8/1.7 |
+| `htd_wbc`<br>`h074_p000` | **170/169** | 79/77 | 2560 | 12/10 | 21/13 | 6.0/13.7 | 1.4/3.7 | 1.8/1.7 |
 | `gr00t_wbc`<br>`h066_p000` | **174/164** | 88/73 | 2560 | 29/147 | 22/14 | 7.3/9.9 | 0.9/1.8 | 1.1/0.4 |
 | `gr00t_wbc`<br>`h074_p000` | **168/170** | 74/77 | 2560 | 11/18 | 4/4 | 8.6/10.2 | 1.2/1.6 | 1.9/1.5 |
 | `morphmimic`<br>`gr00twbcplnr` | **158/168** | 68/81 | 2560 | 89/75 | 5/4 | 11.8/14.2 | 1.6/2.0 | 1.0/2.2 |
@@ -169,7 +169,7 @@ tour, passed through untouched in rotate and direction.
 
 `morphmimic_sonicplnr` is the tracker that holds up: 62/84 completed, level with
 the best PhysX completion of any row, though its position error of 59/41 cm is
-well above the 7-27 cm of `gr00t_wbc` at 0.70-0.74 m and of `decoupled_wbc`.
+well above the 7-27 cm of `gr00t_wbc` at 0.70-0.74 m and of `htd_wbc`.
 The GR00T WBC ghost matches the planner on survival for `morphmimic` and
 `supermimic_rayzhao`, gains for `mimic_lite` and `supermimic_panhainan`, and
 loses some for `supermimic_dyn` and a third for `supermimic_kangzejian`. It
@@ -185,13 +185,13 @@ helps `supermimic_rayzhao`.
 
 Each waypoint gets 10 s. In the tour `sonic`, the trackers and their ghosts are
 commanded at most 0.3 m/s (0.2 m/s sideways for the planner) and 0.5 rad/s, and
-`openwbt`, `gr00t_wbc` and `decoupled_wbc` the same with a 1 s ramp up and down.
+`openwbt`, `gr00t_wbc` and `htd_wbc` the same with a 1 s ramp up and down.
 Each waypoint opens with a punch, and turning to a heading up to 180° away takes
 up to 6.3 s at 0.5 rad/s, plus a second or two recovering from the punch. At
 the 5 s an earlier version of the tour gave, even an ideal robot missed a fifth
 to a third of the headings, so the yaw column of these rows carried a floor of
 roughly 7-35° set by the clock rather than the policy: `gr00t_wbc` and
-`decoupled_wbc` showed 14-43°. At 10 s the floor is about 3-5° and 10 cm, the
+`htd_wbc` showed 14-43°. At 10 s the floor is about 3-5° and 10 cm, the
 reached radius, and the same rows show 4-22°, `gr00t_wbc_h070_p000` 22/31° →
 5/6°.
 
@@ -238,16 +238,16 @@ at x1.5 and 43 at x2.0.
 | `rl_mjlab` | 6 / 6 / 5 | -0.3% | -9.9% | - / - / - | - / - / - |
 | `supermimic`<br>`kyrieyoung`<br>`sonicplnr` | 48 / 48 / 43 | +0.0% | -10.0% | - / - / - | - / - / - |
 | `homie` | 156 / 153 / 144 | -1.9% | -8.0% | 11.7 / 17.5 / 27.5 | 1.9 / 2.3 / 3.1 |
-| `decoupled_wbc`<br>`h074_p000` | 170 / 167 / 156 | -1.6% | -8.2% | 10.2 / 12.7 / 19.0 | 2.6 / 3.0 / 4.1 |
+| `htd_wbc`<br>`h074_p000` | 170 / 167 / 156 | -1.6% | -8.2% | 10.2 / 12.7 / 19.0 | 2.6 / 3.0 / 4.1 |
 | `supermimic`<br>`breezewrf`<br>`gr00twbcplnr` | 32 / 35 / 26 | +9.8% | -18.2% | - / - / - | - / - / - |
 | `gr00t_wbc`<br>`h066_p000` | 168 / 169 / 153 | +0.7% | -8.9% | 8.6 / 12.4 / 21.3 | 1.2 / 1.6 / 2.5 |
 | `supermimic`<br>`breezewrf`<br>`sonicplnr` | 35 / 38 / 30 | +7.6% | -15.5% | - / - / - | - / - / - |
 | `supermimic`<br>`rayzhao`<br>`openwbtplnr` | 60 / 58 / 57 | -2.4% | -4.0% | - / - / - | - / - / - |
-| `decoupled_wbc`<br>`h070_p000` | 171 / 169 / 161 | -0.9% | -5.4% | 11.2 / 14.2 / 24.2 | 2.9 / 3.3 / 5.0 |
+| `htd_wbc`<br>`h070_p000` | 171 / 169 / 161 | -0.9% | -5.4% | 11.2 / 14.2 / 24.2 | 2.9 / 3.3 / 5.0 |
 | `robomimic` | 53 / 52 / 51 | -2.3% | -4.0% | - / - / - | - / - / - |
 | `wcompton` | 2 / 2 / 2 | +2.3% | -8.4% | - / - / - | - / - / - |
-| `decoupled_wbc`<br>`h066_p012` | 171 / 170 / 162 | -0.7% | -5.3% | 12.5 / 18.1 / 32.2 | 3.4 / 4.2 / 6.3 |
-| `decoupled_wbc`<br>`h066_p000` | 170 / 169 / 164 | -0.7% | -3.1% | 12.1 / 17.5 / 28.3 | 3.3 / 4.0 / 5.7 |
+| `htd_wbc`<br>`h066_p012` | 171 / 170 / 162 | -0.7% | -5.3% | 12.5 / 18.1 / 32.2 | 3.4 / 4.2 / 6.3 |
+| `htd_wbc`<br>`h066_p000` | 170 / 169 / 164 | -0.7% | -3.1% | 12.1 / 17.5 / 28.3 | 3.3 / 4.0 / 5.7 |
 | `supermimic`<br>`kyrieyoung`<br>`gr00twbcplnr` | 48 / 49 / 46 | +2.9% | -4.6% | - / - / - | - / - / - |
 | `mimic_lite`<br>`gr00twbcplnr` | 104 / 105 / 101 | +1.0% | -2.4% | - / - / - | - / - / - |
 | `morphmimic`<br>`sonicplnr` | 160 / 165 / 155 | +3.1% | -3.5% | 12.9 / 13.9 / 19.9 | 2.1 / 2.2 / 2.9 |
@@ -288,7 +288,7 @@ at x1.5 and 43 at x2.0.
 Energy and vibrations are means over completed runs of both engines, `-`
 where fewer than a fifth of a row's runs complete.
 
-Stiffer legs cost the `gr00t_wbc`, `decoupled_wbc` and `homie` rows up to three
+Stiffer legs cost the `gr00t_wbc`, `htd_wbc` and `homie` rows up to three
 percent of their survival at x1.5 and three to twelve percent at x2.0;
 `wbc_agile_velocity` loses fifteen and forty-eight percent, and `openwbt`,
 `rl_gym` and `schoi` lose most of theirs already at x1.5. The trackers are the
@@ -308,10 +308,10 @@ stable; the motion trackers tolerate it or gain a little.
 
 ### Why two policies appear four times each
 
-`gr00t_wbc` and `decoupled_wbc` are each one checkpoint under four commanded
+`gr00t_wbc` and `htd_wbc` are each one checkpoint under four commanded
 postures: `h` is torso height in metres, `p` torso pitch in radians. Every row
 owns the same fifteen joints and takes the same commands as any other entry, so
-every row is ranked. `gr00t_wbc_h074_p000` and `decoupled_wbc_h070_p000` are
+every row is ranked. `gr00t_wbc_h074_p000` and `htd_wbc_h070_p000` are
 the postures their authors call canonical.
 
 Commanded height is the only thing that moves the score, and for `gr00t_wbc` it
@@ -319,7 +319,7 @@ buys completion by giving up tracking: 0.74 → 0.70 m is worth nine points of
 completion in MuJoCo and seven in PhysX for three and nine centimetres of
 position error; 0.66 m is another five points in MuJoCo for eleven to fifteen
 more centimetres, while in PhysX it gives ten or eleven points back and the
-error grows four- to fivefold, 27 → 122-147 cm. `decoupled_wbc` pays nothing —
+error grows four- to fivefold, 27 → 122-147 cm. `htd_wbc` pays nothing —
 0.74 → 0.70 m gains two to four points and its MuJoCo error falls from 12 to
 8 cm, 0.66 m adds one to three more at 7-8 cm in MuJoCo, the lowest in the
 table, though PhysX drifts from 10-12 to 15-19 cm. Commanded pitch adds at most
@@ -329,7 +329,10 @@ A wider sweep over `gr00t_wbc`'s walk/balance switch found it inert, so it is
 not reported. Read every one of these rows against the error column as well as
 the completion column.
 
-The `decoupled_wbc` sweep was suggested by @chrisyrniu in
+`htd_wbc` is the whole-body controller of
+[Humanoid Touch Dream (HTD)](https://humanoid-touch-dream.github.io/), from
+[IsaacLab-Decoupled-WBC](https://github.com/chrisyrniu/IsaacLab-Decoupled-WBC);
+it was listed as `decoupled_wbc` before. Its sweep was suggested by @chrisyrniu in
 https://github.com/chrisyrniu/IsaacLab-Decoupled-WBC/issues/1#issuecomment-5596278961
 
 ### What a low score means
@@ -372,15 +375,15 @@ Policies are listed when their legs KP/KD x1.0 runs complete > 95% on average an
 | 16 | [`mimic_lite`<br>`sonicplnr`](results/cmd_vs_real_movements/016_mimic_lite_sonicplnr.png) | x1.0 | 96% | 11% | 0.01 | 0.008 / 0.005 | 49% | 0.27 |
 | 17 | [`morphmimic`<br>`sonicplnr`](results/cmd_vs_real_movements/017_morphmimic_sonicplnr.png) | x1.0 | 96% | 18% | 0.02 | 0.006 / 0.013 | 39% | 0.18 |
 | 18 | [`clobot`<br>`with_arms`](results/cmd_vs_real_movements/018_clobot_with_arms.png) | x1.0 | 97% | 17% | 0.00 | 0.001 / 0.001 | 28% | 0.07 |
-| 19 | [`decoupled_wbc`<br>`h070_p000`](results/cmd_vs_real_movements/019_decoupled_wbc_h070_p000.png) | x1.0 | 99% | 26% | 0.01 | 0.001 / 0.010 | 24% | 0.03 |
+| 19 | [`htd_wbc`<br>`h070_p000`](results/cmd_vs_real_movements/019_htd_wbc_h070_p000.png) | x1.0 | 99% | 26% | 0.01 | 0.001 / 0.010 | 24% | 0.03 |
 | 20 | [`handoff`<br>`with_arms`](results/cmd_vs_real_movements/020_handoff_with_arms.png) | x1.0 | 99% | 48% | 0.01 | 0.000 / 0.000 | 51% | 0.52 |
-| 21 | [`decoupled_wbc`<br>`h074_p000`](results/cmd_vs_real_movements/021_decoupled_wbc_h074_p000.png) | x1.0 | 100% | 11% | 0.00 | 0.001 / 0.001 | 1% | 0.01 |
+| 21 | [`htd_wbc`<br>`h074_p000`](results/cmd_vs_real_movements/021_htd_wbc_h074_p000.png) | x1.0 | 100% | 11% | 0.00 | 0.001 / 0.001 | 1% | 0.01 |
 | 22 | [`homie`](results/cmd_vs_real_movements/022_homie.png) | x1.0 | 100% | 14% | 0.00 | 0.001 / 0.001 | 0% | 0.01 |
 | 23 | [`rl_lab`](results/cmd_vs_real_movements/023_rl_lab.png) | x1.0 | 100% | 24% | 0.01 | 0.001 / 0.002 | 0% | 0.01 |
-| 24 | [`decoupled_wbc`<br>`h066_p012`](results/cmd_vs_real_movements/024_decoupled_wbc_h066_p012.png) | x1.0 | 100% | 29% | 0.00 | 0.000 / 0.124 | 25% | 0.02 |
+| 24 | [`htd_wbc`<br>`h066_p012`](results/cmd_vs_real_movements/024_htd_wbc_h066_p012.png) | x1.0 | 100% | 29% | 0.00 | 0.000 / 0.124 | 25% | 0.02 |
 | 25 | [`amo`](results/cmd_vs_real_movements/025_amo.png) | x1.0 | 100% | 44% | 0.05 | 0.002 / 0.005 | 77% | 1.07 |
 | 26 | [`robomimic`](results/cmd_vs_real_movements/026_robomimic.png) | x1.0 | 101% | 13% | 0.00 | 0.004 / 0.004 | 20% | 0.08 |
-| 27 | [`decoupled_wbc`<br>`h066_p000`](results/cmd_vs_real_movements/027_decoupled_wbc_h066_p000.png) | x1.0 | 101% | 32% | 0.00 | 0.001 / 0.153 | 27% | 0.01 |
+| 27 | [`htd_wbc`<br>`h066_p000`](results/cmd_vs_real_movements/027_htd_wbc_h066_p000.png) | x1.0 | 101% | 32% | 0.00 | 0.001 / 0.153 | 27% | 0.01 |
 | 28 | [`supermimic`<br>`dyn`<br>`sonicplnr`](results/cmd_vs_real_movements/028_supermimic_dyn_sonicplnr.png) | x1.0 | 103% | 41% | 0.12 | 0.013 / 0.023 | 44% | 0.20 |
 | 29 | [`supermimic`<br>`rayzhao`<br>`openwbtplnr`](results/cmd_vs_real_movements/029_supermimic_rayzhao_openwbtplnr.png) | x1.0 | 105% | 67% | 0.48 | 0.049 / 0.062 | 75% | 0.65 |
 | 30 | [`supermimic`<br>`rayzhao`<br>`sonicplnr`](results/cmd_vs_real_movements/030_supermimic_rayzhao_sonicplnr.png) | x1.0 | 106% | 29% | 0.05 | 0.027 / 0.033 | 42% | 0.17 |
@@ -392,7 +395,7 @@ Policies are listed when their legs KP/KD x1.0 runs complete > 95% on average an
 
 `gr00t_wbc_h074_p000` ranks first at legs KP/KD x1.0, with 37% error on small commands. It moves the commanded way in 97% of small walking commands and 99% of small turns, delivers 85% and 90% of them, and drifts 0.001 / 0.002 m/s (MuJoCo / PhysX) when asked to stand still. In the punch tour above it survives 169 s on average, 8 of 71 (the best, `gr00t_wbc_h070_p000`, 173 s).
 
-MuJoCo and PhysX differ in yaw-rate tracking by 0.036 on average (area between the engines' median curves at x1.0), from `morphmimic_openwbtplnr` closest to `decoupled_wbc_h066_p000` furthest:
+MuJoCo and PhysX differ in yaw-rate tracking by 0.036 on average (area between the engines' median curves at x1.0), from `morphmimic_openwbtplnr` closest to `htd_wbc_h066_p000` furthest:
 
 | policy | gap |
 |---|---:|
@@ -422,12 +425,12 @@ MuJoCo and PhysX differ in yaw-rate tracking by 0.036 on average (area between t
 | `rl_lab` | 0.0585 |
 | `robomimic` | 0.0612 |
 | `gr00t_wbc`<br>`h070_p000` | 0.0646 |
-| `decoupled_wbc`<br>`h074_p000` | 0.0686 |
+| `htd_wbc`<br>`h074_p000` | 0.0686 |
 | `morphmimic`<br>`sonicplnr` | 0.0800 |
 | `gr00t_wbc`<br>`h074_p000` | 0.0929 |
-| `decoupled_wbc`<br>`h070_p000` | 0.1014 |
-| `decoupled_wbc`<br>`h066_p012` | 0.1141 |
-| `decoupled_wbc`<br>`h066_p000` | 0.1243 |
+| `htd_wbc`<br>`h070_p000` | 0.1014 |
+| `htd_wbc`<br>`h066_p012` | 0.1141 |
+| `htd_wbc`<br>`h066_p000` | 0.1243 |
 | average | 0.0360 |
 <!-- cmd_vs_real_movements:end -->
 
